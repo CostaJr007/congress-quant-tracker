@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import {
   LayoutDashboard, Users, ArrowLeftRight, TrendingUp,
-  Bitcoin, Trophy, AlertTriangle,
+  Bitcoin, Trophy, AlertTriangle, Monitor,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fetchMeta } from "@/lib/api";
@@ -19,6 +19,10 @@ const navItems = [
   { href: "/signals", label: "Signals", icon: AlertTriangle },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
 ];
+
+const API_BASE =
+  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_URL) ||
+  "http://localhost:8000";
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -85,6 +89,16 @@ export default function Sidebar() {
             </Link>
           );
         })}
+        <a
+          href={`${API_BASE}/terminal/`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-fg-muted hover:text-fg hover:bg-surface-2/60 border border-transparent"
+          title="CI://TERMINAL — Congress disclosures + Bloomberg market desk"
+        >
+          <Monitor className="w-4 h-4" />
+          CI Terminal
+        </a>
       </nav>
 
       <div className="p-4 border-t border-border text-xs text-fg-subtle space-y-1.5">

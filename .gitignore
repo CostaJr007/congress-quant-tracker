@@ -21,9 +21,9 @@ build/
 *.sqlite3
 *.sqlite
 
-# Runtime data & caches
-data/
-pdfs/
+# Runtime data & caches (repo-root only — not kimi_gmt_terminal/js/data)
+/data/
+/pdfs/
 **/cache/
 
 # Virtual env
@@ -55,13 +55,23 @@ Desktop.ini
 
 # Scrapes / clones / junk
 disclose_clone/
-D*/
+# Root-only junk (do NOT use bare D*/ — that ignores every folder named data/)
+/D*/
 clone_*.py
 run_*clone*.bat
 *_check*.py
-_*.py
-_*.html
-_*.pdf
+/_*.py
+/_*.html
+/_*.pdf
+
+# Deliverable zips / external dumps (source lives in kimi_gmt_terminal/)
+*.zip
+/global-market-terminal-final/
+**/market-dashboard/
+
+# Local logs
+*.log
+
 
 # Large legacy frontend deps live under web/node_modules (ignored above)
 web/.next/

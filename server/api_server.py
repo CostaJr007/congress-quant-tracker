@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 from sqlalchemy import case, desc, extract, func, or_
 
@@ -320,7 +322,7 @@ def api_dashboard():
             session.query(Trade)
             .join(Politician, Politician.id == Trade.politician_id)
             .order_by(desc(Trade.filing_date), desc(Trade.trade_date), desc(Trade.id))
-            .limit(12)
+            .limit(40)
             .all()
         )
         recent_trades = [_trade_dict_from_orm(t) for t in recent]
@@ -328,7 +330,7 @@ def api_dashboard():
             from congress_quant_tracker.enrichers.market_data import enrich_trades_batch
 
             # Photos already on dict; attach price change / shares / sparkline (capped tickers)
-            recent_trades = enrich_trades_batch(recent_trades, max_unique_tickers=8)
+            recent_trades = enrich_trades_batch(recent_trades, max_unique_tickers=10)
         except Exception:
             pass
 
@@ -404,6 +406,44 @@ def api_dashboard():
         session.close()
 
 
+@app.get("/api/trades/months")
+def api_trade_months(
+    by: str = Query("filing", description="filing | trade — which date to bucket by"),
+):
+    """Return months that have trades, newest first, with counts."""
+    session = get_db()
+    try:
+        col = Trade.trade_date if by == "trade" else Trade.filing_date
+        # Prefer filing_date; fall back rows with null filing via coalesce in app layer
+        rows = (
+            session.query(
+                extract("year", col).label("y"),
+                extract("month", col).label("m"),
+                func.count(Trade.id),
+            )
+            .filter(col.isnot(None))
+            .group_by("y", "m")
+            .order_by(desc("y"), desc("m"))
+            .all()
+        )
+        months = []
+        names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+        for y, m, count in rows:
+            if y is None or m is None:
+                continue
+            yi, mi = int(y), int(m)
+            months.append({
+                "month": f"{yi:04d}-{mi:02d}",
+                "year": yi,
+                "month_num": mi,
+                "label": f"{names[mi - 1]} {yi}",
+                "count": int(count),
+            })
+        return {"by": by, "months": months, "total_months": len(months)}
+    finally:
+        session.close()
+
+
 @app.get("/api/trades")
 def api_trades(
     limit: int = Query(25, ge=1, le=200),
@@ -415,6 +455,8 @@ def api_trades(
     min_score: Optional[int] = None,
     party: Optional[str] = None,
     chamber: Optional[str] = None,
+    month: Optional[str] = Query(None, description="YYYY-MM filter"),
+    date_field: str = Query("filing", description="filing | trade — month filter field"),
     sort_by: str = "date",
     enrich: bool = Query(False, description="Attach yfinance performance (rate-limited)"),
 ):
@@ -448,6 +490,35 @@ def api_trades(
         if chamber:
             query = query.filter(Politician.chamber == chamber.lower())
 
+        # Month bucket (YYYY-MM) on filing or trade date
+        if month:
+            try:
+                y_str, m_str = month.split("-", 1)
+                yi, mi = int(y_str), int(m_str)
+                col = Trade.trade_date if date_field == "trade" or sort_by in ("trade_date", "tx_date") else Trade.filing_date
+                # If filtering by filing but some rows only have trade_date, use coalesce-like OR
+                if col is Trade.filing_date:
+                    query = query.filter(
+                        or_(
+                            (
+                                (extract("year", Trade.filing_date) == yi)
+                                & (extract("month", Trade.filing_date) == mi)
+                            ),
+                            (
+                                Trade.filing_date.is_(None)
+                                & (extract("year", Trade.trade_date) == yi)
+                                & (extract("month", Trade.trade_date) == mi)
+                            ),
+                        )
+                    )
+                else:
+                    query = query.filter(
+                        extract("year", Trade.trade_date) == yi,
+                        extract("month", Trade.trade_date) == mi,
+                    )
+            except ValueError:
+                pass
+
         total = query.count()
 
         # Sorting contract (frontend labels must match):
@@ -480,6 +551,8 @@ def api_trades(
             "limit": limit,
             "offset": offset,
             "sort_by": sort_by,
+            "month": month,
+            "date_field": date_field,
             "enriched": enrich,
             "trades": trades,
         }
@@ -1130,6 +1203,272 @@ def api_fix_parties():
         return {"status": "ok", "politicians_updated": updated}
     finally:
         session.close()
+
+
+# ─── CI://TERMINAL LIVE feed (yfinance + congress) + static canvas ─────
+
+_GMT_DIR = Path(__file__).resolve().parent.parent / "kimi_gmt_terminal"
+
+
+@app.get("/api/terminal/health")
+def api_terminal_health():
+    from congress_quant_tracker.enrichers.terminal_market import health
+    h = health()
+    h["congress"] = "ok"
+    return h
+
+
+@app.get("/api/terminal/dataset")
+def api_terminal_dataset(dataset: str = Query("tape", description="tape|stocks|aapl60|metals|sectors|news|quotes|meta")):
+    """LIVE market adapter for CI://TERMINAL (yfinance)."""
+    from congress_quant_tracker.enrichers.terminal_market import get_dataset
+
+    try:
+        return get_dataset(dataset)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"LIVE feed unavailable: {e}") from e
+
+
+@app.get("/api/terminal/congress/summary")
+def api_terminal_congress_summary():
+    from congress_quant_tracker.enrichers.terminal_congress import build_summary
+
+    session = get_db()
+    try:
+        return build_summary(session)
+    finally:
+        session.close()
+
+
+@app.get("/api/terminal/congress/months")
+def api_terminal_congress_months(
+    by: str = Query("filing", description="filing | trade"),
+):
+    from congress_quant_tracker.enrichers.terminal_congress import build_months
+
+    session = get_db()
+    try:
+        return build_months(session, by=by)
+    finally:
+        session.close()
+
+
+@app.get("/api/terminal/congress/wire")
+def api_terminal_congress_wire(
+    limit: int = Query(120, ge=1, le=300),
+    offset: int = Query(0, ge=0),
+    chamber: Optional[str] = None,
+    party: Optional[str] = None,
+    side: Optional[str] = None,
+    month: Optional[str] = Query(None, description="YYYY-MM"),
+    date_field: str = Query("filing", description="filing | trade"),
+    q: Optional[str] = None,
+    tag: Optional[str] = None,
+    min_score: Optional[int] = None,
+    enrich: bool = Query(False),
+):
+    from congress_quant_tracker.enrichers.terminal_congress import build_wire
+
+    session = get_db()
+    try:
+        return build_wire(
+            session,
+            limit=limit,
+            offset=offset,
+            chamber=chamber,
+            party=party,
+            side=side,
+            month=month,
+            date_field=date_field,
+            q=q,
+            tag=tag,
+            min_score=min_score,
+            enrich=enrich,
+        )
+    finally:
+        session.close()
+
+
+@app.get("/api/terminal/congress/holders/{ticker}")
+def api_terminal_congress_holders(ticker: str):
+    from congress_quant_tracker.enrichers.terminal_congress import build_holders
+
+    session = get_db()
+    try:
+        return build_holders(session, ticker)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        session.close()
+
+
+@app.get("/api/terminal/congress/sectors")
+def api_terminal_congress_sectors():
+    from congress_quant_tracker.enrichers.terminal_congress import list_sectors
+
+    session = get_db()
+    try:
+        return list_sectors(session)
+    finally:
+        session.close()
+
+
+@app.get("/api/terminal/congress/sector")
+def api_terminal_congress_sector(sector: Optional[str] = None):
+    from congress_quant_tracker.enrichers.terminal_congress import build_sector
+
+    session = get_db()
+    try:
+        return build_sector(session, sector or "")
+    finally:
+        session.close()
+
+
+@app.get("/api/terminal/congress/returns")
+def api_terminal_congress_returns(
+    month: Optional[str] = Query(None, description="YYYY-MM"),
+    date_field: str = Query("filing"),
+    side: Optional[str] = None,
+    chamber: Optional[str] = None,
+    mode: str = Query("trade", description="trade | member"),
+    limit: int = Query(40, ge=5, le=100),
+):
+    """Returns leaderboard: ranked by estimated side-adjusted % since trade."""
+    from congress_quant_tracker.enrichers.terminal_congress import build_returns_leaderboard
+
+    session = get_db()
+    try:
+        return build_returns_leaderboard(
+            session,
+            month=month,
+            date_field=date_field,
+            side=side,
+            chamber=chamber,
+            mode=mode,
+            limit=limit,
+        )
+    finally:
+        session.close()
+
+
+@app.get("/api/terminal/congress/politician")
+def api_terminal_congress_politician(name: Optional[str] = None):
+    from congress_quant_tracker.enrichers.terminal_congress import build_politician
+
+    session = get_db()
+    try:
+        return build_politician(session, name or "")
+    finally:
+        session.close()
+
+
+@app.get("/api/terminal/market/{ticker}")
+def api_terminal_market_chart(
+    ticker: str,
+    sessions: int = Query(120, ge=20, le=400),
+    from_date: Optional[str] = Query(
+        None,
+        description="ISO date — chart starts early enough to include this trade day (daily bars)",
+    ),
+):
+    """Daily OHLCV for FOCUSED ASSET CHART.
+
+    Always daily (weekday sessions). If from_date is set (trade date), the window
+    starts ~15 calendar days before that date through today so distant trades stay
+    on-scale with a visible marker — not clipped to a short 60-bar window.
+    """
+    from congress_quant_tracker.enrichers.market_data import get_history
+
+    ticker = ticker.upper().strip()
+    end = date.today()
+    start = end - timedelta(days=max(sessions * 2, 180))
+
+    trade_d: Optional[date] = None
+    if from_date:
+        try:
+            trade_d = date.fromisoformat(from_date[:10])
+            # pad before trade so marker is not on the left edge
+            start = min(start, trade_d - timedelta(days=20))
+            # ensure we never request absurd windows
+            if (end - start).days > 420:
+                start = end - timedelta(days=420)
+        except ValueError:
+            trade_d = None
+
+    bars = get_history(ticker, start, end)
+    # If no from_date, still keep a healthy daily history (not tiny 60 only)
+    if not from_date and len(bars) > sessions:
+        bars = bars[-sessions:]
+
+    series = [
+        {
+            "d": b["date"],
+            "o": b.get("open") if b.get("open") is not None else b["close"],
+            "h": b.get("high") if b.get("high") is not None else b["close"],
+            "l": b.get("low") if b.get("low") is not None else b["close"],
+            "c": b["close"],
+            "v": b.get("volume") or 0,
+        }
+        for b in bars
+    ]
+    return {
+        "data": {
+            "ticker": ticker,
+            "series": series,
+            "sessions": len(series),
+            "from_date": from_date[:10] if from_date else None,
+            "scale": "daily",
+            "start": series[0]["d"] if series else None,
+            "end": series[-1]["d"] if series else None,
+        },
+        "asof": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "mode": "LIVE" if series else "EMPTY",
+        "source": "yfinance",
+        "convention": "daily bars (weekday sessions), auto_adjust=True; window expands to include trade date",
+    }
+
+
+@app.get("/api/terminal/{dataset}")
+def api_terminal_dataset_path(dataset: str):
+    """Alias: /api/terminal/tape → same as ?dataset=tape.
+    Skip reserved path segments handled by more specific routes above.
+    """
+    if dataset in ("congress", "market", "health", "dataset"):
+        raise HTTPException(status_code=404, detail="use nested terminal routes")
+    return api_terminal_dataset(dataset=dataset)
+
+
+@app.get("/terminal")
+@app.get("/terminal/")
+def terminal_index():
+    """Serve Bloomberg × ASCII global market terminal."""
+    index = _GMT_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=404, detail="GMT terminal not installed (kimi_gmt_terminal/ missing)")
+    return FileResponse(index, media_type="text/html")
+
+
+# Politician headshots (bioguide jpgs) for CI://TERMINAL + API clients
+_POL_PHOTO_DIRS = [
+    Path(__file__).resolve().parent.parent / "web_fused" / "public" / "politicians",
+    Path(__file__).resolve().parent.parent / "web" / "public" / "politicians",
+]
+for _pol_dir in _POL_PHOTO_DIRS:
+    if _pol_dir.is_dir():
+        app.mount(
+            "/politicians",
+            StaticFiles(directory=str(_pol_dir)),
+            name="politician_photos",
+        )
+        break
+
+# Mount static assets for terminal (css, js, fonts) — after routes so /terminal hits HTML first
+if _GMT_DIR.is_dir():
+    app.mount(
+        "/terminal",
+        StaticFiles(directory=str(_GMT_DIR), html=True),
+        name="gmt_terminal",
+    )
 
 
 if __name__ == "__main__":

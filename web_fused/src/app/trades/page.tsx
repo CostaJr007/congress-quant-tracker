@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { fetchTrades, ApiError } from "@/lib/api";
-import TradeRow from "@/components/trade-row";
+import { fetchTrades, fetchTradeMonths, ApiError, type TradeMonth } from "@/lib/api";
 import { EmptyState, ErrorState } from "@/components/states";
 import { cn } from "@/lib/utils";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import TradeGroupList from "@/components/trade-group-list";
+import { CalendarDays } from "lucide-react";
 
 const TAG_FILTERS = [
   { value: "", label: "All" },
@@ -33,6 +34,7 @@ const ASSET_FILTERS = [
 
 export default function TradesPage() {
   const [data, setData] = useState<Record<string, any>>({});
+  const [months, setMonths] = useState<TradeMonth[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,17 +45,42 @@ export default function TradesPage() {
   const [assetType, setAssetType] = useState("");
   const [minScore, setMinScore] = useState("");
   const [sortBy, setSortBy] = useState("date");
+  /** YYYY-MM or "" for all months */
+  const [month, setMonth] = useState<string | null>(null); // null = not initialized yet
   const [offset, setOffset] = useState(0);
-  const LIMIT = 25;
+  const LIMIT = 40;
+
+  const dateField = sortBy === "trade_date" || sortBy === "tx_date" ? "trade" : "filing";
+
+  // Load available months; default to newest month
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchTradeMonths(dateField, ctrl.signal)
+      .then((r) => {
+        setMonths(r.months || []);
+        setMonth((prev) => {
+          if (prev === "") return ""; // user chose All
+          if (prev && r.months?.some((m) => m.month === prev)) return prev;
+          return r.months?.[0]?.month ?? "";
+        });
+      })
+      .catch(() => setMonths([]));
+    return () => ctrl.abort();
+  }, [dateField]);
 
   const load = useCallback(async () => {
+    if (month === null) return; // wait for months init
     setLoading(true);
     setError(null);
     try {
       const params: Record<string, string> = {
-        limit: String(LIMIT), offset: String(offset), sort_by: sortBy,
+        limit: String(LIMIT),
+        offset: String(offset),
+        sort_by: sortBy,
         enrich: "true",
+        date_field: dateField,
       };
+      if (month) params.month = month;
       if (debouncedQ) params.q = debouncedQ;
       if (tag) params.tag = tag;
       if (type) params.trade_type = type;
@@ -65,14 +92,21 @@ export default function TradesPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedQ, tag, type, assetType, minScore, sortBy, offset]);
+  }, [debouncedQ, tag, type, assetType, minScore, sortBy, offset, month, dateField]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setOffset(0); }, [debouncedQ, tag, type, assetType, minScore, sortBy]);
+  useEffect(() => { setOffset(0); }, [debouncedQ, tag, type, assetType, minScore, sortBy, month]);
 
   const total = data.total ?? 0;
   const trades = data.trades || [];
   const hasFilters = Boolean(q || tag || type || assetType || minScore);
+  const activeMonth = months.find((m) => m.month === month);
+  // Group months by year for section headers
+  const byYear = months.reduce<Record<number, TradeMonth[]>>((acc, m) => {
+    (acc[m.year] ||= []).push(m);
+    return acc;
+  }, {});
+  const years = Object.keys(byYear).map(Number).sort((a, b) => b - a);
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
@@ -80,8 +114,16 @@ export default function TradesPage() {
         <div>
           <h1 className="text-2xl font-bold text-fg mb-1">Trades</h1>
           <p className="text-fg-muted text-sm">
-            {total.toLocaleString()} trades
-            <span className="text-fg-subtle"> · % since trade + ~shares estimated (disclosure ranges, not exact)</span>
+            {month
+              ? <>
+                  <span className="text-fg font-medium">{activeMonth?.label || month}</span>
+                  {" · "}
+                  {total.toLocaleString()} trades
+                  {activeMonth ? ` of ${activeMonth.count.toLocaleString()} in this month` : ""}
+                </>
+              : <>{total.toLocaleString()} trades · all months</>
+            }
+            <span className="text-fg-subtle"> · grouped by filer when many on same day</span>
           </p>
         </div>
 
@@ -91,6 +133,69 @@ export default function TradesPage() {
           placeholder="Search ticker, asset or member…"
           className="bg-surface-2/70 border border-border rounded-lg px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:outline-none focus:border-accent/50 w-64"
         />
+      </div>
+
+      {/* Month browser */}
+      <div className="mb-5 rounded-2xl border border-border bg-card p-4">
+        <div className="flex items-center gap-2 mb-3 text-xs text-fg-muted">
+          <CalendarDays className="w-3.5 h-3.5 text-accent" />
+          <span className="font-semibold text-fg">Browse by month</span>
+          <span className="text-fg-subtle">
+            ({dateField === "filing" ? "disclosure date" : "trade date"})
+          </span>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          <button
+            type="button"
+            onClick={() => setMonth("")}
+            className={cn(
+              "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+              month === ""
+                ? "bg-accent/15 text-accent border-accent/30"
+                : "bg-surface-2/60 text-fg-muted border-border hover:text-fg",
+            )}
+          >
+            All months
+          </button>
+        </div>
+
+        {years.map((year) => (
+          <div key={year} className="mb-3 last:mb-0">
+            <div className="text-[10px] uppercase tracking-wider text-fg-subtle mb-1.5 font-semibold">
+              {year}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {byYear[year].map((m) => (
+                <button
+                  key={m.month}
+                  type="button"
+                  onClick={() => setMonth(m.month)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors inline-flex items-center gap-1.5",
+                    month === m.month
+                      ? "bg-accent/15 text-accent border-accent/30"
+                      : "bg-surface-2/60 text-fg-muted border-border hover:text-fg hover:border-border",
+                  )}
+                >
+                  <span>{m.label.replace(` ${year}`, "")}</span>
+                  <span
+                    className={cn(
+                      "text-[10px] tabular-nums px-1.5 py-0.5 rounded-md",
+                      month === m.month ? "bg-accent/20 text-accent" : "bg-background/60 text-fg-subtle",
+                    )}
+                  >
+                    {m.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        {months.length === 0 && (
+          <div className="text-xs text-fg-subtle">No month data yet — run the pipeline.</div>
+        )}
       </div>
 
       {/* Filters */}
@@ -155,28 +260,34 @@ export default function TradesPage() {
             onClick={() => { setQ(""); setTag(""); setType(""); setAssetType(""); setMinScore(""); setSortBy("date"); }}
             className="px-3 py-1.5 rounded-lg text-xs text-fg-subtle hover:text-fg"
           >
-            Clear
+            Clear filters
           </button>
         )}
       </div>
 
-      {loading ? (
+      {month === null || loading ? (
         <div className="space-y-2">
-          {[...Array(10)].map((_, i) => (
+          {[...Array(8)].map((_, i) => (
             <div key={i} className="h-14 rounded-xl bg-card border border-border animate-pulse" />
           ))}
         </div>
       ) : error ? (
         <ErrorState message={error} onRetry={load} />
       ) : trades.length === 0 ? (
-        <EmptyState title="No trades match your filters" />
+        <EmptyState
+          title={month ? `No trades in ${activeMonth?.label || month}` : "No trades match your filters"}
+        />
       ) : (
         <>
-          <div className="space-y-2">
-            {trades.map((trade: any) => (
-              <TradeRow key={trade.id ?? trade.ticker + trade.transaction_date} trade={trade} />
-            ))}
-          </div>
+          {month && (
+            <div className="mb-3 flex items-center gap-2 text-xs text-fg-muted">
+              <span className="font-semibold text-fg">{activeMonth?.label || month}</span>
+              <span>·</span>
+              <span>{total.toLocaleString()} disclosures this month</span>
+            </div>
+          )}
+
+          <TradeGroupList trades={trades} minGroupSize={3} />
 
           {total > LIMIT && (
             <div className="flex items-center justify-center gap-4 mt-8">

@@ -107,6 +107,21 @@ export function fetchTrades(params?: Record<string, string>, signal?: AbortSigna
   return request<TradesResponse>(`/api/trades${qs}`, signal);
 }
 
+export interface TradeMonth {
+  month: string; // YYYY-MM
+  year: number;
+  month_num: number;
+  label: string;
+  count: number;
+}
+
+export function fetchTradeMonths(by: "filing" | "trade" = "filing", signal?: AbortSignal) {
+  return request<{ by: string; months: TradeMonth[]; total_months: number }>(
+    `/api/trades/months?by=${by}`,
+    signal,
+  );
+}
+
 export interface MarketBar {
   date: string;
   close: number;

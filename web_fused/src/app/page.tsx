@@ -9,9 +9,9 @@ import {
 import { fetchDashboard, ApiError } from "@/lib/api";
 import { formatCurrency, politicianHref, partyColor, cn } from "@/lib/utils";
 import KpiCard from "@/components/kpi-card";
-import TradeRow from "@/components/trade-row";
 import { EmptyState, ErrorState } from "@/components/states";
 import PoliticianAvatar from "@/components/politician-avatar";
+import TradeGroupList from "@/components/trade-group-list";
 
 const TAGS = [
   { key: "routine", label: "Routine", color: "#5e6673" },
@@ -246,17 +246,21 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Recent Trades */}
+      {/* Recent Trades — grouped when many share same filer + filing date */}
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-fg">Recent Disclosures</h3>
+        <div>
+          <h3 className="text-sm font-semibold text-fg">Recent Disclosures</h3>
+          <p className="text-[11px] text-fg-subtle mt-0.5">
+            Multiple trades from the same filing are collapsed — click to expand
+          </p>
+        </div>
         <Link href="/trades" className="text-xs text-accent hover:underline">View all →</Link>
       </div>
-      <div className="space-y-2">
-        {(data.recent_trades || []).slice(0, 10).map((trade: any, i: number) => (
-          <TradeRow key={trade.id ?? i} trade={trade} />
-        ))}
-        {(data.recent_trades || []).length === 0 && <EmptyState title="No trades yet" />}
-      </div>
+      <TradeGroupList
+        trades={data.recent_trades || []}
+        minGroupSize={3}
+        empty={<EmptyState title="No trades yet" />}
+      />
     </div>
   );
 }

@@ -1,288 +1,245 @@
-# 🏛️ CongressQuantTracker
+# CongressQuantTracker
 
-**Rastreador quantitativo de disclosures financeiros do Congresso dos EUA**
+**Congressional trading intelligence + Bloomberg-style market desk**
 
-Monitora **todos** os trades de ações e opções de deputados (House) e senadores (Senate) dos Estados Unidos, com análise profunda por político, partido, setor e empresa.
+Rastreador de disclosures financeiros (PTR) da **House** e do **Senate** dos EUA, com scores, fotos, performance estimada via **yfinance**, UI Next.js e um terminal **CI://TERMINAL** (visual Bloomberg × ASCII) para acompanhar deputados/senadores, ativos em comum, setores e ranking de retornos.
 
----
-
-## 🎯 Perguntas que o Sistema Responde
-
-| Pergunta | Análise |
-|---|---|
-| Quais deputados compram mais Tech? | `party_analyzer` + `sector_analyzer` |
-| Democratas vs Republicanos: quem compra mais energia? | `party_analyzer.get_party_sector_exposure()` |
-| Quais políticos estão comprando NVDA? | `sector_analyzer.get_top_buyers_of_ticker("NVDA")` |
-| Qual partido tem mais calls que puts? | `options_analyzer.get_call_put_ratio_by_party()` |
-| Setores mais comprados por cada partido? | `party_analyzer.get_party_behavior_diff()` |
-| Quais opções estão expirando em breve? | `options_analyzer.get_options_expiring_soon()` |
+> Repositório **privado**. Não commitar `.env`, chaves de API, nem o banco SQLite.
 
 ---
 
-## 📁 Estrutura do Projeto
+## O que o sistema faz
+
+| Área | Capacidade |
+|------|------------|
+| **Disclosures** | House FD (zip/PDF) + Senate eFD / fallbacks |
+| **Scoring** | Score 0–100 e tags (routine → high_alert) |
+| **Mercado** | Preço desde o trade, shares est., sparklines (yfinance + cache) |
+| **UI web** | Dashboard, politicians, trades por mês, stocks, signals, leaderboard |
+| **CI://TERMINAL** | Desk denso: wire por mês, fotos, holders, setores, velas diárias, **returns leaderboard** |
+
+---
+
+## Arquitetura
 
 ```
-congress-quant-tracker/
-├── src/
-│   └── congress_quant_tracker/
-│       ├── config.py                    # Configuração central
-│       ├── database/
-│       │   └── models.py                # Modelos SQLAlchemy
-│       ├── fetchers/
-│       │   ├── house_fetcher.py         # Download de PDFs da House
-│       │   └── senate_fetcher.py        # Download de PDFs do Senate
-│       ├── parsers/
-│       │   └── pdf_parser.py            # Extração via Claude 3.5 Sonnet
-│       ├── enrichers/
-│       │   └── company_enricher.py      # Enriquecimento com yfinance
-│       ├── analyzers/
-│       │   ├── politician_analyzer.py   # Análise por político
-│       │   ├── party_analyzer.py        # Democrat vs Republican
-│       │   ├── sector_analyzer.py       # Análise setorial
-│       │   └── options_analyzer.py      # Análise de opções
-│       └── services/
-│           └── data_updater.py          # Pipeline completo
-├── dashboard/
-│   └── app.py                           # Streamlit dashboard
-├── scripts/
-│   └── daily_update.py                  # Script de atualização diária
-├── pyproject.toml
-├── README.md
-└── .env.example
+┌─────────────────────┐     ┌──────────────────────────┐
+│  web_fused (Next.js)│────▶│  FastAPI :8000           │
+│  :3000              │     │  SQLite + pipelines      │
+└─────────────────────┘     │  yfinance market data    │
+                            │  /terminal/  (static)    │
+┌─────────────────────┐     │  /politicians/*.jpg      │
+│  CI://TERMINAL      │────▶│  /api/terminal/*         │
+│  kimi_gmt_terminal/ │     └──────────────────────────┘
+└─────────────────────┘
 ```
+
+| Componente | Path | Porta |
+|------------|------|-------|
+| API | `server/api_server.py` | **8000** |
+| UI fused | `web_fused/` | **3000** |
+| Terminal | `kimi_gmt_terminal/` → servido em `/terminal/` | via 8000 |
+| Domain | `src/congress_quant_tracker/` | — |
+| Fotos | `web_fused/public/politicians/` | `/politicians/{bioguide}.jpg` |
 
 ---
 
-## 🚀 Instalação
+## Início rápido
 
 ### Pré-requisitos
 
-- Python 3.12+
-- `uv` (gerenciador de pacotes)
-- PostgreSQL (opcional, SQLite funciona para desenvolvimento)
-- Chave da API Anthropic (Claude 3.5 Sonnet)
+- Python **3.12+** e [uv](https://github.com/astral-sh/uv)
+- Node.js **20+** (para `web_fused`)
+- Windows / macOS / Linux
 
-### Passos
+### 1. Clone e dependências
 
 ```bash
-# 1. Clone o repositório
-git clone <seu-repo>
+git clone https://github.com/CostaJr007/congress-quant-tracker.git
 cd congress-quant-tracker
-
-# 2. Instale dependências com uv
 uv sync
-
-# 3. Configure variáveis de ambiente
-cp .env.example .env
-# Edite .env com sua chave da API Anthropic
-
-# 4. Inicialize o banco de dados
-uv run python -c "
-from congress_quant_tracker.config import settings
-from congress_quant_tracker.database.models import init_db
-init_db(settings.DATABASE_URL)
-print('Banco de dados criado!')
-"
-
-# 5. Execute a primeira atualização de dados
-uv run python scripts/daily_update.py --once
-
-# 6. Inicie o dashboard
-uv run streamlit run dashboard/app.py
+cd web_fused && npm install && cd ..
 ```
 
-### Configuração da API do Claude
-
-1. Crie uma conta em [console.anthropic.com](https://console.anthropic.com)
-2. Gere uma chave de API
-3. Adicione no arquivo `.env`:
-   ```
-   ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxxxxxx
-   ```
-
----
-
-## 🖥️ Dashboard Streamlit
-
-O dashboard possui **6 abas** interativas:
-
-### 🏠 Overview
-- Métricas gerais (total de trades, políticos, opções)
-- Tickers mais quentes
-- Resumo por partido
-
-### 👤 Políticos
-- Busca por nome com autocomplete
-- Histórico completo de trades
-- Exposição setorial individual
-- Ratio compras/vendas
-
-### 🐘🫏 Partidos
-- Comparação Democratas vs Republicanos
-- Volume de compras/vendas por partido
-- Setores mais comprados por cada partido
-- Heatmap: Partido vs Setor
-- Top tickers por partido
-
-### 🏭 Setores
-- Treemap de atividade setorial
-- Drilldown por setor com breakdown partidário
-
-### 🏢 Empresas
-- Busca por ticker (ex: NVDA, TSLA, AAPL)
-- Resumo do ticker (compras/vendas/políticos)
-- Top compradores do ticker
-- Opções do ticker
-
-### 📊 Opções
-- Calls vs Puts por partido
-- Strikes mais populares
-- Top traders de opções
-- Opções com vencimento próximo
-
-### Exemplo de Comando
+### 2. Ambiente
 
 ```bash
-uv run streamlit run dashboard/app.py
+# crie .env a partir do exemplo (não versionado)
+copy .env.example .env   # Windows
+# cp .env.example .env   # Unix
 ```
 
-Acesse `http://localhost:8501` no navegador.
+Variáveis úteis:
 
----
+| Variável | Default | Função |
+|----------|---------|--------|
+| `MARKET_DATA_ENABLED` | `1` | yfinance (charts, returns, enrich) |
+| `NO_YF` | `0` | desliga yfinance no scorer (mercado pode continuar com MARKET_DATA) |
+| `GROQ_API_KEY` | — | extração LLM de PDFs (opcional) |
+| `TAVILY_API_KEY` | — | busca / resolve (opcional) |
+| `HTTP_PROXY` | — | proxy HTTPS p/ Senate eFD se bloqueado |
+| `DATABASE_URL` | SQLite local | URL do banco |
 
-## 🔄 Atualização Diária Automática
-
-### Execução Manual
+### 3. Subir API + UI
 
 ```bash
-# Atualização única
-uv run python scripts/daily_update.py --once
+# API (market data ON)
+set MARKET_DATA_ENABLED=1
+uv run python server\api_server.py
 
-# Modo agendado (9:00 AM diário)
-uv run python scripts/daily_update.py --schedule
+# outro terminal — Next.js
+cd web_fused
+echo NEXT_PUBLIC_API_URL=http://localhost:8000 > .env.local
+npm run dev -- -p 3000
 ```
 
-### Agendamento no Windows (Task Scheduler)
+- **Dashboard:** http://localhost:3000  
+- **CI://TERMINAL:** http://localhost:8000/terminal/  
+- **API docs:** http://localhost:8000/docs  
 
-```powershell
-# Criar tarefa agendada (PowerShell como Admin)
-$action = New-ScheduledTaskAction -Execute "uv" -Argument "run python scripts/daily_update.py --once" -WorkingDirectory "D:\congress-quant-tracker"
-$trigger = New-ScheduledTaskTrigger -Daily -At "09:00"
-Register-ScheduledTask -TaskName "CongressQuantDaily" -Action $action -Trigger $trigger
-```
-
-### Agendamento no Linux/macOS (cron)
+### 4. Pipelines (dados)
 
 ```bash
-# Adicione ao crontab: 
-0 9 * * * cd /path/to/congress-quant-tracker && uv run python scripts/daily_update.py --once
+# House official
+uv run python scripts/update_official.py
+
+# Senate (pode precisar proxy)
+uv run python scripts/update_senate.py
+
+# Re-score
+uv run python scripts/rescore.py
+```
+
+Endpoints de pipeline também existem em `POST /api/pipeline/*`.
+
+---
+
+## CI://TERMINAL
+
+Desk monoespaçado preto + barras laranja (estilo Bloomberg **sem** marcas protegidas).
+
+### Widgets principais (preset CONGRESS)
+
+| Widget | Função |
+|--------|--------|
+| **MEMBERS · BY MONTH** | Browser por mês (filed/traded), cards com foto, blocos colapsados se muitos trades |
+| **RETURNS LEADERBOARD** | Ranking por Δ% / ADJ% (BUY:+Δ, SELL:−Δ) e PnL$ est. |
+| **FOCUSED ASSET** | Velas diárias (ou linha) + marcador TX na data do trade |
+| **ASSET HOLDERS** | Quem mais operou o mesmo ticker (House/Senate) |
+| **POLITICIAN BOOK** | Tickers + datas TX/FILED do membro |
+| **SECTOR DESK** | Overlap House×Senate por setor |
+
+Presets: `CGS` (default) · `GLB` · `EQ` · `MET` · `NWS`  
+Layout editável (EDIT / drag) salvo em `localStorage` (`layout.v3`).
+
+### API do terminal
+
+| Endpoint | Descrição |
+|----------|-----------|
+| `GET /api/terminal/dataset?dataset=tape\|stocks\|…` | Mercado yfinance |
+| `GET /api/terminal/congress/wire` | Disclosures (+ filtros mês, chamber, party, side, q) |
+| `GET /api/terminal/congress/months` | Meses com trades |
+| `GET /api/terminal/congress/holders/{ticker}` | Co-holders |
+| `GET /api/terminal/congress/sector` | Setor desk |
+| `GET /api/terminal/congress/politician?name=` | Book do membro |
+| `GET /api/terminal/congress/returns` | Leaderboard de retornos |
+| `GET /api/terminal/market/{ticker}?from_date=` | OHLCV diário p/ chart |
+
+Config LIVE do front: `kimi_gmt_terminal/js/live.config.js` (same-origin).
+
+### Definições de dados (importante)
+
+- Disclosures usam **faixas de valor**, não shares exatos → shares/PnL são **estimativas** (midpoint).
+- `change_pct` = movimento do ativo desde a data do trade (yfinance, `auto_adjust`).
+- `return_side_adj` = BUY:+Δ% / SELL:−Δ% (outcome do lado da operação).
+- Metais no tape usam futuros Yahoo (`GC=F` etc.) como proxy de spot.
+- News wire DEMO não é feed licenciado; não fabricar notícias “live”.
+
+Detalhes: `kimi_gmt_terminal/DATA_DEFINITIONS.md` e `kimi_gmt_terminal/README.md`.
+
+---
+
+## UI web_fused
+
+- **Trades** — filtro por mês, grouping de filers pesados (`TradeGroupList`)
+- **Politicians / Stocks / Signals / Leaderboard**
+- Link **CI Terminal** na sidebar → abre o desk
+
+```
+NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
 ---
 
-## 📊 Modelo de Dados
+## Estrutura de pastas (resumo)
 
-### `politicians`
-| Coluna | Tipo | Descrição |
-|---|---|---|
-| id | INTEGER PK | ID único |
-| name | VARCHAR(255) | Nome completo |
-| chamber | ENUM(house, senate) | Câmara |
-| party | ENUM(D, R, I) | Partido |
-| state | VARCHAR(2) | Estado (sigla) |
-| district | VARCHAR(10) | Distrito (House) |
-| committees | TEXT | Comitês |
-| active | BOOLEAN | Ativo? |
-
-### `trades`
-| Coluna | Tipo | Descrição |
-|---|---|---|
-| id | INTEGER PK | ID único |
-| politician_id | INTEGER FK | Político |
-| ticker | VARCHAR(10) | Símbolo da ação |
-| transaction_type | ENUM(buy, sell, exchange) | Tipo |
-| trade_date | DATE | Data do trade |
-| value_min / value_max | INTEGER | Range de valor ($) |
-| filing_date | DATE | Data de filing |
-
-### `options_trades`
-| Coluna | Tipo | Descrição |
-|---|---|---|
-| id | INTEGER PK | ID único |
-| trade_id | INTEGER FK | Trade pai |
-| option_type | ENUM(call, put) | Tipo de opção |
-| strike | FLOAT | Strike price |
-| expiration_date | DATE | Data de vencimento |
-| contracts_min / max | INTEGER | Número de contratos |
-
-### `companies`
-| Coluna | Tipo | Descrição |
-|---|---|---|
-| ticker | VARCHAR(10) | Símbolo (PK lógica) |
-| name | VARCHAR(255) | Nome da empresa |
-| sector | VARCHAR(100) | Setor (yfinance) |
-| industry | VARCHAR(100) | Indústria (yfinance) |
-| market_cap | FLOAT | Capitalização de mercado |
-| beta | FLOAT | Beta |
-
-### `updates_log`
-| Coluna | Tipo | Descrição |
-|---|---|---|
-| id | INTEGER PK | ID único |
-| update_type | VARCHAR(50) | Tipo de atualização |
-| status | ENUM | Status (started/completed/failed) |
-| records_processed | INTEGER | Registros processados |
-
----
-
-## 🔧 Stack Tecnológica
-
-| Componente | Tecnologia | Propósito |
-|---|---|---|
-| Linguagem | Python 3.12+ | Core |
-| Gerenciador | `uv` | Dependências |
-| Banco | PostgreSQL / SQLite | Armazenamento |
-| ORM | SQLAlchemy 2.0 | Modelos |
-| Dashboard | Streamlit | Visualização |
-| Parsing PDF | pdfplumber + Claude 3.5 Sonnet | Extração |
-| Enriquecimento | yfinance | Dados de mercado |
-| Agendamento | APScheduler | Updates diários |
-| Gráficos | Plotly | Visualizações |
-| HTTP | httpx | Requisições |
-
----
-
-## 🧪 Exemplos de Uso Programático
-
-```python
-from congress_quant_tracker.config import settings
-from congress_quant_tracker.database.models import get_engine, get_session
-from congress_quant_tracker.analyzers.party_analyzer import PartyAnalyzer
-from congress_quant_tracker.analyzers.sector_analyzer import SectorAnalyzer
-
-engine = get_engine(settings.DATABASE_URL)
-session = get_session(engine)
-
-# Democratas vs Republicanos por setor
-party = PartyAnalyzer(session)
-print(party.get_party_sector_exposure())
-
-# Quem está comprando NVDA?
-sector = SectorAnalyzer(session)
-print(sector.get_top_buyers_of_ticker("NVDA"))
+```
+congress-quant-tracker/
+├── server/api_server.py          # FastAPI (trades, market, terminal, pipelines)
+├── src/congress_quant_tracker/
+│   ├── enrichers/
+│   │   ├── market_data.py        # yfinance cache / trade performance
+│   │   ├── terminal_market.py    # feed LIVE do heatmap/tape
+│   │   └── terminal_congress.py  # wire, holders, returns, setores
+│   ├── fetchers/ parsers/ scoring/ services/ …
+├── kimi_gmt_terminal/            # CI://TERMINAL (HTML/CSS/JS offline-capable)
+├── web_fused/                    # Next.js UI principal
+├── scripts/                      # update_official, update_senate, rescore
+├── dashboard/                    # Streamlit legado (opcional)
+├── pyproject.toml
+└── README.md
 ```
 
 ---
 
-## 📝 Notas
+## Segurança e privacidade
 
-- A API da House (`disclosures-clerk.house.gov`) pode ter rate limits. O sistema usa retry com exponential backoff.
-- A API do Senate (`efdsearch.senate.gov`) requer headers específicos.
-- O parsing via Claude 3.5 Sonnet é o ponto de maior custo ($3/M input tokens, $15/M output tokens). Aprox. 800-2000 tokens por PDF.
-- Use `DATABASE_URL=sqlite:///...` para desenvolvimento local.
+- **Não** commitar: `.env`, `*.db`, `data/`, chaves API, proxies com credenciais.
+- `.gitignore` já cobre secrets, cache de preços, `node_modules`, PDFs.
+- Fotos de políticos: `web_fused/public/politicians/` (bioguide); API monta em `/politicians/`.
+- Repo deve permanecer **private** se contiver dados operacionais ou configs internas.
+
+```bash
+gh repo edit CostaJr007/congress-quant-tracker --visibility private
+```
 
 ---
 
-## 📄 Licença
+## Scripts úteis
 
-MIT
+| Comando | Ação |
+|---------|------|
+| `uv run python server/api_server.py` | API :8000 |
+| `cd web_fused && npm run dev` | UI :3000 |
+| `uv run python scripts/update_official.py` | House |
+| `uv run python scripts/update_senate.py` | Senate |
+| `uv run python scripts/rescore.py` | Re-score trades |
+
+---
+
+## Limitações conhecidas
+
+- Yahoo/yfinance: atraso e rate limit; 1ª carga do returns leaderboard pode demorar.
+- Senate eFD: Akamai/403 — use proxy HTTPS se necessário.
+- Setores no SQLite muitas vezes vazios → mapa estático ticker→setor no terminal.
+- Holiday calendar de bolsas: sessão do clock pode marcar OPEN sem feriados oficiais.
+- Estimativas de shares/PnL **não** são posições oficiais.
+
+---
+
+## Licença / uso
+
+Uso interno / pesquisa. Fontes oficiais de disclosure (House/Senate) e cotações Yahoo (não oficiais).  
+Não é aconselhamento de investimento. Não copiar marcas/logos Bloomberg.
+
+---
+
+## Changelog (merge terminal)
+
+- Integração **CI://TERMINAL** Bloomberg × ASCII + adapters LIVE/DEMO  
+- yfinance bulk (tape, heatmap, metals, chart diário)  
+- Wire por mês + cards de membros com **fotos**  
+- Holders / sector desk / politician book + datas TX/FILED  
+- Candlestick diário + marcador de trade  
+- **Returns leaderboard** (trade / member, ADJ%, PnL est.)  
+- Link na sidebar do `web_fused`  

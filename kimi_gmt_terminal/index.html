@@ -1,0 +1,79 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>CI://TERMINAL — Congress + Global Market Desk</title>
+<meta name="description" content="Bloomberg-style ASCII desk: congressional disclosures, co-holders, sector overlap, and yfinance charts."/>
+<link rel="stylesheet" href="css/terminal.css?v=photos2"/>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=&#39;http://www.w3.org/2000/svg&#39; viewBox=&#39;0 0 16 16&#39;%3E%3Crect width=&#39;16&#39; height=&#39;16&#39; fill=&#39;%23000&#39;/%3E%3Crect x=&#39;2&#39; y=&#39;2&#39; width=&#39;12&#39; height=&#39;3&#39; fill=&#39;%23F28C00&#39;/%3E%3Ctext x=&#39;2&#39; y=&#39;13&#39; font-family=&#39;monospace&#39; font-size=&#39;8&#39; fill=&#39;%2300C176&#39;%3EC%3C/text%3E%3C/svg%3E"/>
+</head>
+<body>
+<a class="skip-link" href="#grid">SKIP TO CANVAS</a>
+
+<header id="cmdbar" role="banner" aria-label="command bar">
+  <div class="brand">CI://TERMINAL</div>
+  <noscript><div class="seg">REQUIRES JAVASCRIPT</div></noscript>
+</header>
+
+<div id="tapebar" role="marquee" aria-label="global index tape">
+  <div class="tape-ctl">
+    <span>TAPE</span>
+    <button id="tape-pause" aria-label="pause or resume tape scroll" title="pause/resume [T]">⏸</button>
+  </div>
+  <div id="tape-viewport"><div id="tape-track"></div></div>
+</div>
+
+<main id="canvas" aria-label="monitoring canvas">
+  <div id="grid" role="list" aria-label="widgets"></div>
+  <div id="placeholder" aria-hidden="true"></div>
+</main>
+
+<aside id="inspector" role="complementary" aria-label="data source inspector" aria-hidden="true">
+  <div class="ins-head">
+    <span class="t" id="ins-type">INSPECTOR</span>
+    <span style="flex:1"></span>
+    <span class="faint" style="font-size:9px">Esc closes</span>
+    <button id="ins-close" class="w-btn" aria-label="close inspector" style="font-size:14px">✕</button>
+  </div>
+  <div class="ins-body" id="ins-body"></div>
+</aside>
+
+<aside id="dstatus" role="complementary" aria-label="data status panel">
+  <div class="ins-head" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--line2);background:#0A0A0A">
+    <span class="t" style="color:var(--org);font-weight:800;font-size:11px">DATA STATUS · ADAPTERS &amp; PROVENANCE</span>
+    <span style="flex:1"></span>
+    <button id="btn-dstatus-close" class="w-btn" aria-label="close data status" style="font-size:14px">✕</button>
+  </div>
+  <div class="ins-body" id="ds-body"></div>
+</aside>
+
+<div id="addmenu" role="menu" aria-label="add widget"></div>
+<div id="hovercard" aria-hidden="true"></div>
+<div id="selftest-results" hidden=""></div>
+<pre id="accept-results" hidden=""></pre>
+<div id="boot-status" style="position:fixed;left:4px;bottom:2px;font-size:9px;color:#5C5C5C;z-index:50">BOOTING…</div>
+
+<script src="js/data/fixtures.js"></script>
+<script src="js/data/fixtures-congress.js"></script><!-- file:// fallback only; LIVE desk uses API -->
+<script src="js/live.config.js"></script>
+<script src="js/accept.js"></script>
+<script src="js/util.js"></script>
+<script src="js/adapters.js"></script>
+<script src="js/sessions.js"></script>
+<script src="js/charts.js?v=candle1"></script>
+<script src="js/widgets.js"></script>
+<script src="js/widgets2.js"></script>
+<script src="js/widgets-congress.js?v=returns1"></script>
+<script src="js/layout.js?v=returns1"></script>
+<script src="js/inspector.js"></script>
+<script src="js/selftest.js"></script>
+<script src="js/app.js?v=returns1"></script>
+<script>
+document.getElementById("tape-pause").addEventListener("click", function () {
+  var p = window.GMT.state.prefs;
+  p.tapePaused = !p.tapePaused;
+  window.GMT.app.savePrefs();
+  this.textContent = p.tapePaused ? "▶" : "⏸";
+  this.setAttribute("aria-pressed", p.tapePaused);
+});
+</script>
+</body></html>
