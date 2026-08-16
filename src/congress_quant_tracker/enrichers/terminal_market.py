@@ -119,8 +119,8 @@ CONVENTION = (
 
 # TTL caches
 _cache: dict[str, dict[str, Any]] = {}
-_CACHE_TTL = 120  # 2 min for terminal quotes
-_HIST_TTL = 600  # 10 min for history series
+_CACHE_TTL = 30  # 30 sec for minimal quote delay
+_HIST_TTL = 300  # 5 min for history series
 
 
 def _now_iso() -> str:
@@ -581,7 +581,10 @@ def get_dataset(dataset: str) -> dict[str, Any]:
         if not data:
             raise RuntimeError("sectors empty")
     elif ds == "news":
-        data = build_news_demo_labeled()
+        from congress_quant_tracker.enrichers.news_feed import fetch_live_news
+        data = fetch_live_news(limit=60)
+        if not data:
+            data = build_news_demo_labeled()
     elif ds == "meta":
         data = [build_meta()]
     else:
@@ -591,7 +594,7 @@ def get_dataset(dataset: str) -> dict[str, Any]:
         "data": data,
         "asof": asof,
         "convention": CONVENTION,
-        "source": "yfinance",
+        "source": "live_financial_rss" if ds == "news" else "yfinance",
         "mode": "LIVE",
     }
     _cache_set(ck, payload)

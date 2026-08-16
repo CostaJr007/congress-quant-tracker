@@ -7,44 +7,51 @@ window.GMT = window.GMT || {};
   const U = G.util, el = U.el;
   const COLS = 12, ROWH = 26, GAP = 6;
 
-  /* CONGRESS is default merge desk: disclosures + holders + chart + sector overlap */
+  /* CONGRESS is default merge desk: disclosures (timeline) + politician book + chart + holders */
   const CONGRESS = [
-    { id: "cwire", x: 0, y: 0, w: 7, h: 16 },
-    { id: "returns", x: 7, y: 0, w: 5, h: 16 },
-    { id: "focuschart", x: 0, y: 16, w: 7, h: 11 },
-    { id: "holders", x: 7, y: 16, w: 5, h: 6 },
-    { id: "polbook", x: 7, y: 22, w: 5, h: 5 },
-    { id: "sectordesk", x: 0, y: 27, w: 12, h: 10 }
+    { id: "cwire", x: 0, y: 0, w: 6, h: 18 },
+    { id: "polbook", x: 6, y: 0, w: 6, h: 18 },
+    { id: "focuschart", x: 0, y: 18, w: 6, h: 14 },
+    { id: "holders", x: 6, y: 18, w: 6, h: 14 },
+    { id: "sectordesk", x: 0, y: 32, w: 12, h: 12 }
   ];
   const DEFAULTS = CONGRESS;
   const PRESETS = {
     CONGRESS: CONGRESS,
-    GLOBAL: [
-      { id: "heat", x: 0, y: 0, w: 8, h: 15 },
-      { id: "breadth", x: 8, y: 0, w: 4, h: 6 },
-      { id: "news", x: 8, y: 6, w: 4, h: 9 },
-      { id: "aapl", x: 0, y: 15, w: 7, h: 11 },
-      { id: "sector", x: 7, y: 15, w: 5, h: 11 },
-      { id: "metals", x: 0, y: 26, w: 7, h: 12 },
-      { id: "pulse", x: 7, y: 26, w: 5, h: 12 },
-      { id: "indexmap", x: 7, y: 38, w: 5, h: 7 },
-      { id: "ticker", x: 0, y: 45, w: 12, h: 7 }
+    DOSSIER: [
+      { id: "polbook", x: 0, y: 0, w: 6, h: 22 },
+      { id: "holders", x: 6, y: 0, w: 6, h: 11 },
+      { id: "focuschart", x: 6, y: 11, w: 6, h: 11 },
+      { id: "cwire", x: 0, y: 22, w: 12, h: 14 }
     ],
-    EQUITIES: [
-      { id: "heat", x: 0, y: 0, w: 8, h: 13 }, { id: "breadth", x: 8, y: 0, w: 4, h: 6 },
-      { id: "news", x: 8, y: 6, w: 4, h: 7 }, { id: "aapl", x: 0, y: 13, w: 7, h: 11 },
-      { id: "sector", x: 7, y: 13, w: 5, h: 11 }, { id: "indexmap", x: 0, y: 24, w: 12, h: 6 }
+    RANKINGS: [
+      { id: "returns", x: 0, y: 0, w: 8, h: 22 },
+      { id: "focuschart", x: 8, y: 0, w: 4, h: 11 },
+      { id: "holders", x: 8, y: 11, w: 4, h: 11 },
+      { id: "cwire", x: 0, y: 22, w: 12, h: 14 }
     ],
-    METALS: [
-      { id: "metals", x: 0, y: 0, w: 7, h: 15 }, { id: "pulse", x: 7, y: 0, w: 5, h: 12 },
-      { id: "indexmap", x: 7, y: 12, w: 5, h: 7 }, { id: "heat", x: 0, y: 15, w: 7, h: 11 },
-      { id: "breadth", x: 7, y: 19, w: 5, h: 7 }, { id: "news", x: 0, y: 26, w: 12, h: 6 },
-      { id: "ticker", x: 0, y: 32, w: 12, h: 6 }
+    MARKET: [
+      { id: "heat", x: 0, y: 0, w: 7, h: 16 },
+      { id: "focuschart", x: 7, y: 0, w: 5, h: 11 },
+      { id: "breadth", x: 7, y: 11, w: 5, h: 5 },
+      { id: "sector", x: 0, y: 16, w: 4, h: 11 },
+      { id: "metals", x: 4, y: 16, w: 4, h: 11 },
+      { id: "pulse", x: 8, y: 16, w: 4, h: 11 },
+      { id: "ticker", x: 0, y: 27, w: 12, h: 6 }
     ],
     NEWS: [
-      { id: "news", x: 0, y: 0, w: 5, h: 17 }, { id: "heat", x: 5, y: 0, w: 7, h: 11 },
-      { id: "breadth", x: 5, y: 11, w: 7, h: 6 }, { id: "ticker", x: 0, y: 17, w: 12, h: 7 },
-      { id: "indexmap", x: 0, y: 24, w: 12, h: 6 }
+      { id: "news", x: 0, y: 0, w: 8, h: 22 },
+      { id: "pulse", x: 8, y: 0, w: 4, h: 10 },
+      { id: "breadth", x: 8, y: 10, w: 4, h: 6 },
+      { id: "ticker", x: 8, y: 16, w: 4, h: 6 }
+    ],
+    ALL: [
+      { id: "cwire", x: 0, y: 0, w: 6, h: 16 },
+      { id: "polbook", x: 6, y: 0, w: 6, h: 16 },
+      { id: "heat", x: 0, y: 16, w: 6, h: 12 },
+      { id: "focuschart", x: 6, y: 16, w: 6, h: 12 },
+      { id: "news", x: 0, y: 28, w: 6, h: 12 },
+      { id: "metals", x: 6, y: 28, w: 6, h: 12 }
     ]
   };
 

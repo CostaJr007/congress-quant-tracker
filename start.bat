@@ -1,20 +1,20 @@
 @echo off
-title CongressInvests
+title CongressQuant CI://TERMINAL
 cd /d "%~dp0"
 
 echo.
 echo  ========================================
-echo   CongressInvests Tracker
+echo   CongressQuant CI://TERMINAL
 echo  ========================================
 echo.
 
-start "CongressInvests API" cmd /k "cd /d "%~dp0" && uv run python server\api_server.py"
-timeout /t 2 /nobreak >nul
-start "CongressInvests Web" cmd /k "cd /d "%~dp0web_fused" && npm run dev"
+start "CI://TERMINAL Server" cmd /k "cd /d "%~dp0" && uv run python server\api_server.py"
+timeout /t 3 /nobreak >nul
+start http://localhost:8000/terminal/
 
-echo  API:  http://localhost:8000
-echo  App:  http://localhost:3000
+echo  Terminal: http://localhost:8000/terminal/
+echo  API Docs: http://localhost:8000/docs
 echo.
-echo  Opened two terminals. Close them to stop.
+echo  Server running in background window. Close it to stop.
 echo.
 pause

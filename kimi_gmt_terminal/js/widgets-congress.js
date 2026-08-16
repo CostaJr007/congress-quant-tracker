@@ -208,27 +208,37 @@ window.GMT = window.GMT || {};
       const active = months.find(m => m.month === p.wireMonth);
 
       /* --- month browser --- */
-      const monthBox = el("div", { class: "month-browser" });
-      monthBox.appendChild(el("div", {
+      const monthBox = el("div", { class: "month-browser", style: "background:#050505;border-bottom:1px solid var(--line2);padding:4px 8px" });
+      
+      const mbTop = el("div", { style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:4px" });
+      mbTop.appendChild(el("div", {
         class: "mb-head",
-        html: `<span class="org">BROWSE BY MONTH</span> · ` +
-          `<span class="dim">${(p.wireDateField || "filing") === "trade" ? "trade date" : "filing / disclosure date"}</span>`
+        html: `<span class="org" style="font-weight:800;font-size:10px">📅 DISCLOSURE TIMELINE</span> · ` +
+          `<span class="dim" style="font-size:9px">indexing by ${(p.wireDateField || "filing") === "trade" ? "execution date" : "official filing date"}</span>`
       }));
 
-      const dateRow = el("div", { class: "toolbar", style: "padding:2px 0" });
-      dateRow.appendChild(btn("FILED", (p.wireDateField || "filing") === "filing", () => {
-        p.wireDateField = "filing"; G.app.savePrefs(); G.app.reloadMonthsAndWire();
+      const dateRow = el("div", { class: "seg", style: "display:inline-flex;border:1px solid var(--line2);border-radius:2px;padding:1px;background:#000" });
+      dateRow.appendChild(el("button", {
+        class: (p.wireDateField || "filing") === "filing" ? "on" : "",
+        style: ((p.wireDateField || "filing") === "filing" ? "background:var(--org);color:#000;font-weight:800;" : "") + "font-size:9px;padding:1px 6px",
+        text: "FILED DATE",
+        onclick: () => { p.wireDateField = "filing"; G.app.savePrefs(); G.app.reloadMonthsAndWire(); }
       }));
-      dateRow.appendChild(btn("TRADED", p.wireDateField === "trade", () => {
-        p.wireDateField = "trade"; G.app.savePrefs(); G.app.reloadMonthsAndWire();
+      dateRow.appendChild(el("button", {
+        class: p.wireDateField === "trade" ? "on" : "",
+        style: (p.wireDateField === "trade" ? "background:var(--org);color:#000;font-weight:800;" : "") + "font-size:9px;padding:1px 6px",
+        text: "TRADE DATE",
+        onclick: () => { p.wireDateField = "trade"; G.app.savePrefs(); G.app.reloadMonthsAndWire(); }
       }));
-      monthBox.appendChild(dateRow);
+      mbTop.appendChild(dateRow);
+      monthBox.appendChild(mbTop);
 
-      const chipRow = el("div", { class: "month-chips" });
+      const chipRow = el("div", { class: "month-chips", style: "display:flex;flex-wrap:wrap;gap:3px;align-items:center" });
       chipRow.appendChild(el("button", {
         class: "mchip" + (p.wireMonth === "" ? " on" : ""),
-        text: "ALL",
-        title: "All months",
+        style: "font-weight:800;font-size:9px;padding:2px 6px",
+        text: "✦ ALL MONTHS",
+        title: "View all recorded months",
         onclick: () => { p.wireMonth = ""; G.app.savePrefs(); G.app.loadCongressWire(); }
       }));
       // group by year
@@ -237,10 +247,11 @@ window.GMT = window.GMT || {};
         (byYear[m.year] ||= []).push(m);
       });
       Object.keys(byYear).map(Number).sort((a, b) => b - a).forEach(year => {
-        chipRow.appendChild(el("span", { class: "myear", text: String(year) }));
+        chipRow.appendChild(el("span", { class: "myear", style: "color:var(--org);font-weight:800;font-size:10px;margin-left:4px", text: String(year) }));
         byYear[year].forEach(m => {
           chipRow.appendChild(el("button", {
             class: "mchip" + (p.wireMonth === m.month ? " on" : ""),
+            style: "font-size:9px;padding:2px 5px",
             text: m.label.replace(" " + year, "") + " ·" + m.count,
             title: m.label + " · " + m.count + " trades",
             onclick: () => { p.wireMonth = m.month; G.app.savePrefs(); G.app.loadCongressWire(); }
@@ -250,24 +261,62 @@ window.GMT = window.GMT || {};
       monthBox.appendChild(chipRow);
       body.appendChild(monthBox);
 
-      /* filters: chamber / party / side only (no score tags) */
-      const bar = el("div", { class: "toolbar" });
-      [["ALL", "ALL"], ["House", "HOUSE"], ["Senate", "SENATE"]].forEach(([lab, v]) => {
-        bar.appendChild(btn(lab, (p.wireChamber || "ALL") === v, () => {
-          p.wireChamber = v; G.app.savePrefs(); G.app.loadCongressWire();
+      /* --- filters: segmented CHAMBER / PARTY / SIDE --- */
+      const filterBar = el("div", {
+        class: "toolbar",
+        style: "display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:4px 8px;background:var(--bg2);border-bottom:1px solid var(--line2)"
+      });
+
+      // 1. CHAMBER GROUP
+      const segChamber = el("div", { class: "seg", style: "display:inline-flex;align-items:center;border:1px solid var(--line2);border-radius:2px;padding:1px;background:#050505" });
+      segChamber.appendChild(el("span", { class: "faint", style: "font-size:9px;font-weight:800;padding:2px 5px;color:var(--org)", text: "CHAMBER:" }));
+      [["ALL", "ALL", "All Chambers"], ["House", "HOUSE", "House of Representatives"], ["Senate", "SENATE", "US Senate"]].forEach(([lab, v, title]) => {
+        const on = (p.wireChamber || "ALL") === v;
+        segChamber.appendChild(el("button", {
+          class: on ? "on" : "",
+          style: (on ? "background:var(--org);color:#000;font-weight:800;" : "") + "font-size:9px;padding:2px 6px",
+          text: lab,
+          title: title,
+          onclick: () => { p.wireChamber = v; G.app.savePrefs(); G.app.loadCongressWire(); }
         }));
       });
-      [["ALL", "ALL"], ["D", "D"], ["R", "R"]].forEach(([lab, v]) => {
-        bar.appendChild(btn(lab, (p.wireParty || "ALL") === v, () => {
-          p.wireParty = v; G.app.savePrefs(); G.app.loadCongressWire();
+      filterBar.appendChild(segChamber);
+
+      // 2. PARTY GROUP
+      const segParty = el("div", { class: "seg", style: "display:inline-flex;align-items:center;border:1px solid var(--line2);border-radius:2px;padding:1px;background:#050505" });
+      segParty.appendChild(el("span", { class: "faint", style: "font-size:9px;font-weight:800;padding:2px 5px;color:var(--org)", text: "PARTY:" }));
+      [["ALL", "ALL", "All Parties"], ["(D) DEM", "D", "Democrats"], ["(R) REP", "R", "Republicans"]].forEach(([lab, v, title]) => {
+        const on = (p.wireParty || "ALL") === v;
+        const col = on ? "background:var(--org);color:#000;font-weight:800;" : (v === "D" ? "color:#3FA7A3;" : (v === "R" ? "color:#FF7B72;" : ""));
+        segParty.appendChild(el("button", {
+          class: on ? "on" : "",
+          style: col + "font-size:9px;padding:2px 6px",
+          text: lab,
+          title: title,
+          onclick: () => { p.wireParty = v; G.app.savePrefs(); G.app.loadCongressWire(); }
         }));
       });
-      [["ALL", "ALL"], ["BUY", "BUY"], ["SELL", "SELL"]].forEach(([lab, v]) => {
-        bar.appendChild(btn(lab, (p.wireSide || "ALL") === v, () => {
-          p.wireSide = v; G.app.savePrefs(); G.app.loadCongressWire();
+      filterBar.appendChild(segParty);
+
+      // 3. TRADE SIDE GROUP (BUY vs SELL)
+      const segSide = el("div", { class: "seg", style: "display:inline-flex;align-items:center;border:1px solid var(--line2);border-radius:2px;padding:1px;background:#050505" });
+      segSide.appendChild(el("span", { class: "faint", style: "font-size:9px;font-weight:800;padding:2px 5px;color:var(--org)", text: "SIDE:" }));
+      [["ALL TRADES", "ALL", "All buys and sells"], ["▲ BUY", "BUY", "Purchases only"], ["▼ SELL", "SELL", "Sales only"]].forEach(([lab, v, title]) => {
+        const on = (p.wireSide || "ALL") === v;
+        const col = on
+          ? (v === "BUY" ? "background:#00C176;color:#000;font-weight:800;" : (v === "SELL" ? "background:#FF4D4F;color:#000;font-weight:800;" : "background:var(--org);color:#000;font-weight:800;"))
+          : (v === "BUY" ? "color:#00C176;" : (v === "SELL" ? "color:#FF4D4F;" : ""));
+        segSide.appendChild(el("button", {
+          class: on ? "on" : "",
+          style: col + "font-size:9px;padding:2px 6px",
+          text: lab,
+          title: title,
+          onclick: () => { p.wireSide = v; G.app.savePrefs(); G.app.loadCongressWire(); }
         }));
       });
-      body.appendChild(bar);
+      filterBar.appendChild(segSide);
+
+      body.appendChild(filterBar);
 
       /* search member / ticker */
       const searchRow = el("div", { class: "toolbar" });
@@ -290,6 +339,15 @@ window.GMT = window.GMT || {};
       searchRow.appendChild(el("button", {
         text: "↻", title: "reload",
         onclick: () => G.app.loadCongressWire()
+      }));
+      searchRow.appendChild(el("button", {
+        style: "background:#121212;border:1px solid #3A3A3A;color:var(--org);font-size:9px;font-weight:800;padding:2px 8px;cursor:pointer;white-space:nowrap;margin-left:auto",
+        text: "🏆 RANKINGS",
+        title: "Abrir mesa dedicada de Rankings e Retornos",
+        onclick: () => {
+          G.layout.applyPreset("RANKINGS");
+          G.app.syncPresetButtons();
+        }
       }));
       body.appendChild(searchRow);
 
@@ -419,6 +477,34 @@ window.GMT = window.GMT || {};
         body.appendChild(el("div", { class: "pad dim", text: "> select a trade or ticker" }));
         return;
       }
+
+      if (h && h.positioning) {
+        const pos = h.positioning;
+        const pcrCard = el("div", {
+          style: "margin:4px 6px;padding:6px 8px;background:#0A0E14;border:1px solid var(--line2);border-radius:3px;display:flex;flex-direction:column;gap:4px"
+        });
+        const vwapRow = (pos.avg_buy_price || pos.avg_sell_price)
+          ? `<div style="display:flex;justify-content:space-between;font-size:9px;border-top:1px dashed #292929;padding-top:3px;margin-top:2px">` +
+            (pos.avg_buy_price ? `<span style="color:#00C176;font-weight:700">▲ AVG BUY: $${U.fmtNum(pos.avg_buy_price, 2)}</span>` : '<span class="dim">▲ AVG BUY: —</span>') +
+            (pos.avg_sell_price ? `<span style="color:#FF4D4F;font-weight:700">▼ AVG SELL: $${U.fmtNum(pos.avg_sell_price, 2)}</span>` : '<span class="dim">▼ AVG SELL: —</span>') +
+            `</div>`
+          : "";
+        pcrCard.innerHTML =
+          `<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px">` +
+          `<span style="font-weight:800;color:${pos.sentiment_color}">● ${pos.sentiment}</span>` +
+          `<span class="dim">P/C RATIO: <b style="color:var(--org)">${pos.put_call_ratio}</b> (${pos.buy_count}B / ${pos.sell_count}S)</span>` +
+          `</div>` +
+          `<div style="height:5px;width:100%;background:#FF4D4F;border-radius:2px;overflow:hidden;display:flex">` +
+          `<div style="width:${pos.buy_pct}%;background:#00C176;height:100%"></div>` +
+          `</div>` +
+          `<div style="display:flex;justify-content:space-between;font-size:9px" class="faint">` +
+          `<span style="color:#00C176">▲ BUY ${pos.buy_pct}% ($${U.fmtVol(pos.buy_volume)})</span>` +
+          `<span style="color:#FF4D4F">▼ SELL ${pos.sell_pct}% ($${U.fmtVol(pos.sell_volume)})</span>` +
+          `</div>` +
+          vwapRow;
+        body.appendChild(pcrCard);
+      }
+
       body.appendChild(el("div", {
         class: "pad", style: "font-size:10px;padding:3px 8px",
         html: `<span class="up">House ${h.house_count || 0}</span> · <span class="org">Senate ${h.senate_count || 0}</span> · ` +
@@ -488,6 +574,17 @@ window.GMT = window.GMT || {};
       if (!desk) {
         body.appendChild(el("div", { class: "pad dim", text: "> pick a sector" }));
         return;
+      }
+
+      if (desk && desk.positioning) {
+        const pos = desk.positioning;
+        const secCard = el("div", {
+          style: "margin:3px 6px;padding:4px 8px;background:#0A0E14;border:1px solid var(--line2);border-radius:3px;display:flex;justify-content:space-between;align-items:center;font-size:10px"
+        });
+        secCard.innerHTML =
+          `<span style="font-weight:800;color:${pos.sentiment_color}">● ${pos.sentiment} (${pos.buy_pct}% BUY)</span>` +
+          `<span class="dim">P/C RATIO: <b style="color:var(--org)">${pos.put_call_ratio}</b> · Vol: $${U.fmtVol(pos.buy_volume + pos.sell_volume)}</span>`;
+        body.appendChild(secCard);
       }
       body.appendChild(el("div", {
         class: "pad", style: "font-size:10px;padding:3px 8px",
@@ -634,25 +731,57 @@ window.GMT = window.GMT || {};
       const loading = G.datasets.returnsLoading;
       const err = G.datasets.returnsError;
 
-      const bar = el("div", { class: "toolbar" });
-      bar.appendChild(btn("TRADES", (p.returnsMode || "trade") === "trade", () => {
-        p.returnsMode = "trade"; G.app.savePrefs(); G.app.loadReturns();
-      }));
-      bar.appendChild(btn("MEMBERS", p.returnsMode === "member", () => {
-        p.returnsMode = "member"; G.app.savePrefs(); G.app.loadReturns();
-      }));
-      bar.appendChild(btn("ALL", (p.returnsSide || "ALL") === "ALL", () => {
-        p.returnsSide = "ALL"; G.app.savePrefs(); G.app.loadReturns();
-      }));
-      bar.appendChild(btn("BUY", p.returnsSide === "BUY", () => {
-        p.returnsSide = "BUY"; G.app.savePrefs(); G.app.loadReturns();
-      }));
-      bar.appendChild(btn("SELL", p.returnsSide === "SELL", () => {
-        p.returnsSide = "SELL"; G.app.savePrefs(); G.app.loadReturns();
+      const bar = el("div", {
+        class: "toolbar",
+        style: "display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:4px 8px;background:var(--bg2);border-bottom:1px solid var(--line2)"
+      });
+
+      // View mode: Members (grouped) vs Trades (individual)
+      const segView = el("div", { class: "seg", style: "display:inline-flex;align-items:center;border:1px solid var(--line2);border-radius:2px;padding:1px;background:#050505" });
+      segView.appendChild(el("span", { class: "faint", style: "font-size:9px;font-weight:800;padding:2px 5px;color:var(--org)", text: "VIEW:" }));
+      [["MEMBERS", "member", "Rank by Congress Member (consolidated)"], ["TRADES", "trade", "Rank individual transactions"]].forEach(([lab, v, title]) => {
+        const on = (p.returnsMode || "member") === v;
+        segView.appendChild(el("button", {
+          class: on ? "on" : "",
+          style: (on ? "background:var(--org);color:#000;font-weight:800;" : "") + "font-size:9px;padding:2px 6px",
+          text: lab,
+          title: title,
+          onclick: () => { p.returnsMode = v; G.app.savePrefs(); G.app.loadReturns(); }
+        }));
+      });
+      bar.appendChild(segView);
+
+      // Side: ALL vs BUY vs SELL
+      const segSide = el("div", { class: "seg", style: "display:inline-flex;align-items:center;border:1px solid var(--line2);border-radius:2px;padding:1px;background:#050505" });
+      segSide.appendChild(el("span", { class: "faint", style: "font-size:9px;font-weight:800;padding:2px 5px;color:var(--org)", text: "SIDE:" }));
+      [["ALL", "ALL", "All Sides"], ["▲ BUY", "BUY", "Buys only"], ["▼ SELL", "SELL", "Sells only"]].forEach(([lab, v, title]) => {
+        const on = (p.returnsSide || "ALL") === v;
+        const col = on
+          ? (v === "BUY" ? "background:#00C176;color:#000;font-weight:800;" : (v === "SELL" ? "background:#FF4D4F;color:#000;font-weight:800;" : "background:var(--org);color:#000;font-weight:800;"))
+          : (v === "BUY" ? "color:#00C176;" : (v === "SELL" ? "color:#FF4D4F;" : ""));
+        segSide.appendChild(el("button", {
+          class: on ? "on" : "",
+          style: col + "font-size:9px;padding:2px 6px",
+          text: lab,
+          title: title,
+          onclick: () => { p.returnsSide = v; G.app.savePrefs(); G.app.loadReturns(); }
+        }));
+      });
+      bar.appendChild(segSide);
+
+      bar.appendChild(el("button", {
+        text: "↻", title: "Reload returns (yfinance)",
+        style: "margin-left:auto;font-size:11px;padding:1px 6px",
+        onclick: () => G.app.loadReturns()
       }));
       bar.appendChild(el("button", {
-        text: "↻", title: "reload returns (yfinance)",
-        onclick: () => G.app.loadReturns()
+        text: "🏛️ CONGRESS DESK",
+        title: "Voltar para Mesa Principal do Congresso",
+        style: "font-size:10px;padding:2px 8px;font-weight:700;background:#121212;border:1px solid #3A3A3A;color:var(--org);cursor:pointer",
+        onclick: () => {
+          G.layout.applyPreset("CONGRESS");
+          G.app.syncPresetButtons();
+        }
       }));
       body.appendChild(bar);
 
@@ -818,16 +947,21 @@ window.GMT = window.GMT || {};
       const chg = +(last.c - prev.c).toFixed(2);
       const chgPct = +(chg / prev.c * 100).toFixed(2);
       const styleLabel = p.chartStyle === "line" ? "LINE" : "CANDLE";
-      const hi = el("div", { class: "toolbar", style: "gap:10px;flex-wrap:wrap" });
+      const pos = G.datasets.holders && G.datasets.holders.positioning;
+      const avgBuy = (chart && chart.avg_buy_price) || (pos && pos.avg_buy_price);
+      const avgSell = (chart && chart.avg_sell_price) || (pos && pos.avg_sell_price);
+
+      const hi = el("div", { class: "toolbar", style: "gap:8px;flex-wrap:wrap" });
       hi.innerHTML =
         `<span class="num" style="font-weight:800;font-size:14px">${U.fmtNum(last.c, 2)}</span>` +
         `<span class="num ${U.cls(chg)}">${U.arrow(chg)} ${U.fmtChg(chg, 2)} (${U.fmtPct(chgPct)})</span>` +
+        (avgBuy ? `<span class="chip" style="background:rgba(0,193,118,0.15);color:#00C176;border:1px solid #00C176;font-weight:800;font-size:9px">▲ CONG BUY $${U.fmtNum(avgBuy, 2)}</span>` : '') +
+        (avgSell ? `<span class="chip" style="background:rgba(255,77,79,0.15);color:#FF4D4F;border:1px solid #FF4D4F;font-weight:800;font-size:9px">▼ CONG SELL $${U.fmtNum(avgSell, 2)}</span>` : '') +
         `<span class="dim">O ${U.fmtNum(last.o, 2)}</span>` +
         `<span class="dim">H ${U.fmtNum(last.h, 2)}</span>` +
         `<span class="dim">L ${U.fmtNum(last.l, 2)}</span>` +
         `<span class="dim">V ${U.fmtVol(last.v)}</span>` +
-        `<span class="chip" style="font-size:9px">${styleLabel} · DAILY · ${s.length}</span>` +
-        `<span class="faint">${U.esc(s[0].d)} → ${U.esc(s[s.length - 1].d)}</span>`;
+        `<span class="chip" style="font-size:9px">${styleLabel} · DAILY · ${s.length}</span>`;
       body.appendChild(hi);
 
       const box = el("div", { class: "chart-box", "aria-label": tk + " " + styleLabel + " chart" });
@@ -838,6 +972,8 @@ window.GMT = window.GMT || {};
         draw(box, {
           series: s, dp: 2, color: "#00C176",
           markDate: markDate,
+          avgBuyPrice: avgBuy,
+          avgSellPrice: avgSell,
           aria: tk + " daily " + styleLabel.toLowerCase(),
           onPick: (i, pt) => pt && G.inspector.open("session", { sym: tk, bar: pt, index: i, total: s.length })
         });

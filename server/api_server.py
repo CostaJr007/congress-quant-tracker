@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 import uvicorn
 from sqlalchemy import case, desc, extract, func, or_
 
@@ -218,7 +219,9 @@ def api_health():
 
 
 @app.get("/api/dashboard")
-def api_dashboard():
+def api_dashboard(
+    enrich: bool = Query(False, description="Attach yfinance performance (slow)"),
+):
     session = get_db()
     try:
         total_trades = session.query(func.count(Trade.id)).scalar() or 0
@@ -326,13 +329,14 @@ def api_dashboard():
             .all()
         )
         recent_trades = [_trade_dict_from_orm(t) for t in recent]
-        try:
-            from congress_quant_tracker.enrichers.market_data import enrich_trades_batch
+        if enrich:
+            try:
+                from congress_quant_tracker.enrichers.market_data import enrich_trades_batch
 
-            # Photos already on dict; attach price change / shares / sparkline (capped tickers)
-            recent_trades = enrich_trades_batch(recent_trades, max_unique_tickers=10)
-        except Exception:
-            pass
+                # Photos already on dict; attach price change / shares / sparkline (capped tickers)
+                recent_trades = enrich_trades_batch(recent_trades, max_unique_tickers=10)
+            except Exception:
+                pass
 
         this_month = monthly[-1]["count"] if monthly else 0
         prev_month = monthly[-2]["count"] if len(monthly) > 1 else 0
@@ -1330,7 +1334,7 @@ def api_terminal_congress_returns(
     date_field: str = Query("filing"),
     side: Optional[str] = None,
     chamber: Optional[str] = None,
-    mode: str = Query("trade", description="trade | member"),
+    mode: str = Query("member", description="member | trade"),
     limit: int = Query(40, ge=5, le=100),
 ):
     """Returns leaderboard: ranked by estimated side-adjusted % since trade."""
@@ -1411,6 +1415,42 @@ def api_terminal_market_chart(
         }
         for b in bars
     ]
+
+    # Calculate Congressional VWAP (Average Buy and Sell price)
+    avg_buy_price = None
+    avg_sell_price = None
+    session = get_db()
+    try:
+        t_rows = session.query(Trade.trade_date, Trade.transaction_type, Trade.value_min, Trade.value_max).filter(Trade.ticker == ticker, Trade.trade_date.isnot(None)).all()
+        buy_vol = 0.0
+        buy_shares = 0.0
+        sell_vol = 0.0
+        sell_shares = 0.0
+        price_by_date = {b["date"]: b["close"] for b in bars}
+        for td_str, side, vmin, vmax in t_rows:
+            d_str = str(td_str)[:10]
+            p = price_by_date.get(d_str)
+            if not p:
+                for b_date in sorted(price_by_date.keys()):
+                    if b_date >= d_str:
+                        p = price_by_date[b_date]
+                        break
+            if p and p > 0:
+                mid = ((vmin or 0) + (vmax or 0)) / 2.0 or float(vmax or vmin or 10000)
+                sh = mid / p
+                if (side or "").lower() in ("buy", "purchase"):
+                    buy_vol += mid
+                    buy_shares += sh
+                else:
+                    sell_vol += mid
+                    sell_shares += sh
+        avg_buy_price = round(buy_vol / buy_shares, 2) if buy_shares > 0 else None
+        avg_sell_price = round(sell_vol / sell_shares, 2) if sell_shares > 0 else None
+    except Exception:
+        pass
+    finally:
+        session.close()
+
     return {
         "data": {
             "ticker": ticker,
@@ -1420,6 +1460,8 @@ def api_terminal_market_chart(
             "scale": "daily",
             "start": series[0]["d"] if series else None,
             "end": series[-1]["d"] if series else None,
+            "avg_buy_price": avg_buy_price,
+            "avg_sell_price": avg_sell_price,
         },
         "asof": datetime.now().astimezone().isoformat(timespec="seconds"),
         "mode": "LIVE" if series else "EMPTY",
@@ -1438,6 +1480,58 @@ def api_terminal_dataset_path(dataset: str):
     return api_terminal_dataset(dataset=dataset)
 
 
+@app.get("/")
+def root_index():
+    """Redirect root to CI://TERMINAL."""
+    return RedirectResponse(url="/terminal/", status_code=302)
+
+
+class ChatRequest(BaseModel):
+    messages: list[dict]
+    provider: str = "groq"
+
+
+@app.get("/api/terminal/chat/models")
+def api_chat_models():
+    """List available AI Copilot models and providers."""
+    return {
+        "providers": [
+            {
+                "id": "groq",
+                "name": "Groq — Llama 3.3 70B",
+                "badge": "FREE / ULTRA-FAST",
+                "available": bool(settings.GROQ_API_KEY),
+                "is_default": True,
+            },
+            {
+                "id": "openai",
+                "name": "OpenAI — GPT-4o Mini",
+                "badge": "ADVANCED REASONING",
+                "available": bool(settings.OPENAI_API_KEY),
+                "is_default": False,
+            },
+            {
+                "id": "local",
+                "name": "Local Llama Server (Kolmogorov)",
+                "badge": "100% OFFLINE / PRIVATE",
+                "available": True,
+                "is_default": False,
+            },
+        ],
+        "default_provider": "groq",
+    }
+
+
+@app.post("/api/terminal/chat")
+async def api_chat(req: ChatRequest):
+    """Execute CongressQuant AI Copilot analysis."""
+    from congress_quant_tracker.agent.copilot import CopilotAgent
+
+    agent = CopilotAgent(provider=req.provider)
+    result = await agent.chat(req.messages)
+    return result
+
+
 @app.get("/terminal")
 @app.get("/terminal/")
 def terminal_index():
@@ -1450,6 +1544,7 @@ def terminal_index():
 
 # Politician headshots (bioguide jpgs) for CI://TERMINAL + API clients
 _POL_PHOTO_DIRS = [
+    Path(__file__).resolve().parent.parent / "data" / "politicians",
     Path(__file__).resolve().parent.parent / "web_fused" / "public" / "politicians",
     Path(__file__).resolve().parent.parent / "web" / "public" / "politicians",
 ]

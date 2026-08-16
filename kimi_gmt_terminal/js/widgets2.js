@@ -59,17 +59,18 @@ window.GMT = window.GMT || {};
   };
 
   /* ---------- E. NEWS WIRE ---------- */
-  const NEWS_CATS = ["AI", "TECH", "ENERGY", "FINANCE", "MACRO", "METALS"];
+  const NEWS_CATS = ["AI", "TECH", "MACRO", "CONGRESS", "FINANCE", "ENERGY", "CRYPTO"];
   W.news = {
-    num: "05", title: "NEWS WIRE", min: [3, 5],
+    num: "05", title: "NEWS WIRE · LIVE RSS", min: [3, 5],
     render(body) {
       const p = G.state.prefs;
+      if (!Array.isArray(p.newsCats)) p.newsCats = [];
       const bar = el("div", { class: "toolbar" });
       NEWS_CATS.forEach(c => {
         const on = p.newsCats.indexOf(c) >= 0;
         bar.appendChild(el("button", {
-          class: "chip" + (on ? " demo" : ""), text: c, "aria-pressed": on,
-          style: on ? "border-color:var(--org);color:var(--org)" : "",
+          class: "chip" + (on ? " on" : ""), text: c, "aria-pressed": on,
+          style: on ? "border-color:var(--org);color:var(--org);font-weight:800" : "",
           onclick: () => {
             const i = p.newsCats.indexOf(c);
             if (i >= 0) p.newsCats.splice(i, 1); else p.newsCats.push(c);
@@ -80,37 +81,70 @@ window.GMT = window.GMT || {};
       bar.appendChild(el("span", { class: "spacer" }));
       bar.appendChild(el("button", {
         class: "chip", text: p.newsPaused ? "▶ RESUME" : "⏸ PAUSE", "aria-pressed": p.newsPaused,
-        title: "Pause/resume auto-update. DEMO wire is static; control applies to LIVE feeds.",
+        title: "Pause/resume auto-update.",
         onclick: () => { p.newsPaused = !p.newsPaused; G.app.savePrefs(); G.app.rerender("news"); }
       }));
       const q = el("input", {
-        class: "search", placeholder: "> grep", value: p.newsQ || "", "aria-label": "search headlines",
+        class: "search", placeholder: "> search", value: p.newsQ || "", "aria-label": "search headlines",
         style: "width:90px",
         oninput: U.debounce(e => { p.newsQ = e.target.value.trim(); G.app.savePrefs(); G.app.rerender("news"); }, 200)
       });
       bar.appendChild(q);
       body.appendChild(bar);
 
-      const demoStrip = el("div", { style: "padding:2px 8px;font-size:9px;border-bottom:1px solid var(--line)" });
-      demoStrip.appendChild(el("span", { class: "chip demo", text: "DEMO WIRE — ALL HEADLINES ARE ILLUSTRATIVE FIXTURES, NOT REAL NEWS" }));
-      body.appendChild(demoStrip);
+      const liveStrip = el("div", { style: "padding:2px 8px;font-size:9px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px" });
+      liveStrip.innerHTML = `<span class="chip up" style="font-weight:800">● LIVE RSS</span> <span class="faint">Real-time headlines from Yahoo Finance, FXStreet Macro & MarketWatch</span>`;
+      body.appendChild(liveStrip);
 
       const read = G.state.readNews;
-      let list = G.datasets.news.slice().sort((a, b) => b.time.localeCompare(a.time)); // consistent comparator, 0 on ties
-      if (p.newsCats.length) list = list.filter(n2 => p.newsCats.indexOf(n2.cat) >= 0);
-      if (p.newsQ) { const qq = p.newsQ.toUpperCase(); list = list.filter(n2 => (n2.headline + n2.tickers.join(" ")).toUpperCase().indexOf(qq) >= 0); }
+      let list = (G.datasets.news || []).slice().sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+      if (p.newsCats && p.newsCats.length) {
+        list = list.filter(n2 => {
+          const cat = (n2.cat || "").toUpperCase();
+          const txt = ((n2.headline || "") + " " + (n2.summary || "")).toUpperCase();
+          return p.newsCats.some(c => {
+            if (c === "AI") return cat === "AI" || txt.includes(" AI ") || txt.includes("ARTIFICIAL INTELLIGENCE") || txt.includes("CHATGPT") || txt.includes("OPENAI") || txt.includes("NVIDIA");
+            if (c === "TECH") return cat === "TECH" || cat === "AI" || txt.includes("TECH") || txt.includes("SEMICONDUCTOR") || txt.includes("SOFTWARE") || txt.includes("CHIP");
+            if (c === "CONGRESS") return cat === "CONGRESS" || txt.includes("CONGRESS") || txt.includes("SENATE") || txt.includes("HOUSE") || txt.includes("LAWMAKER");
+            if (c === "MACRO") return cat === "MACRO" || txt.includes("FED") || txt.includes("INFLATION") || txt.includes("RATE") || txt.includes("CPI") || txt.includes("DOLLAR") || txt.includes("TREASURY");
+            if (c === "FINANCE") return cat === "FINANCE" || txt.includes("BANK") || txt.includes("WALL STREET") || txt.includes("EARNINGS");
+            if (c === "ENERGY") return cat === "ENERGY" || txt.includes("OIL") || txt.includes("GAS") || txt.includes("ENERGY");
+            if (c === "CRYPTO") return cat === "CRYPTO" || txt.includes("BITCOIN") || txt.includes("CRYPTO");
+            return cat === c;
+          });
+        });
+      }
+      if (p.newsQ) {
+        const qq = p.newsQ.toUpperCase();
+        list = list.filter(n2 => ((n2.headline || "") + " " + (n2.tickers || []).join(" ")).toUpperCase().indexOf(qq) >= 0);
+      }
       const unread = list.filter(n2 => !read[n2.id]).length;
-      body.appendChild(el("div", { class: "faint", style: "font-size:9px;padding:2px 8px", text: `> ${list.length} items · ${unread} unread · reverse-chronological · click opens summary/tickers/linked move` }));
-      const wrap = el("div", { role: "feed", "aria-label": "news wire" });
+      body.appendChild(el("div", { class: "faint", style: "font-size:9px;padding:2px 8px", text: `> ${list.length} items · ${unread} unread · click opens full report · [READ ↗] opens article` }));
+      const wrap = el("div", { role: "feed", "aria-label": "news wire", style: "overflow-y:auto;flex:1 1 auto" });
       list.forEach(item => {
-        const row = el("div", { class: "news-item" + (read[item.id] ? "" : " unread"), tabindex: "0", role: "article", "aria-label": item.headline });
-        row.appendChild(el("span", { class: "nl-time num", text: item.time.slice(11, 19) }));
+        const row = el("div", { class: "news-item" + (read[item.id] ? "" : " unread"), tabindex: "0", role: "article", "aria-label": item.headline, style: "display:flex;align-items:center;gap:6px" });
+        row.appendChild(el("span", { class: "nl-time num", text: (item.time || "").slice(11, 16) }));
         row.appendChild(el("span", { class: "nl-cat cat-" + item.cat, text: "[" + item.cat + "]" }));
-        const h = el("div", { class: "nl-head" });
+        const h = el("div", { class: "nl-head", style: "flex:1 1 auto" });
         h.appendChild(el("span", { text: item.headline }));
         h.appendChild(document.createTextNode(" "));
-        h.appendChild(el("span", { class: "nl-src", text: "— " + item.source }));
+        h.appendChild(el("span", { class: "nl-src faint", text: "— " + item.source }));
         row.appendChild(h);
+
+        if (item.link && item.link.startsWith("http")) {
+          const ext = el("a", {
+            class: "chip",
+            style: "color:var(--org);border:1px solid var(--org);text-decoration:none;font-weight:800;font-size:9px;padding:1px 5px;flex:0 0 auto",
+            href: item.link,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            text: "READ ↗",
+            title: "Open article in new tab"
+          });
+          ext.addEventListener("click", e => e.stopPropagation());
+          row.appendChild(ext);
+        }
+
         const open = () => { read[item.id] = 1; row.classList.remove("unread"); G.inspector.open("news", item); };
         row.addEventListener("click", open);
         row.addEventListener("keydown", e => { if (e.key === "Enter") open(); });

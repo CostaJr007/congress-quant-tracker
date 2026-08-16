@@ -16,12 +16,22 @@ window.GMT = window.GMT || {};
     wireTag: "ALL",
     wireView: "group",
     chartStyle: "candle",
-    returnsMode: "trade",   // trade | member
+    returnsMode: "member",   // member | trade
     returnsSide: "ALL"
   };
 
+  const rawPrefs = U.store.get("prefs.v3", {});
+  if (rawPrefs.returnsMode !== "trade" && rawPrefs.returnsMode !== "member") {
+    rawPrefs.returnsMode = "member";
+  }
+  // Force default to member on fresh session
+  if (!rawPrefs.returnsMode || rawPrefs.returnsMode === "trade") {
+    rawPrefs.returnsMode = "member";
+    U.store.set("prefs.v3", rawPrefs);
+  }
+
   G.state = {
-    prefs: Object.assign({}, PREF_DEFAULTS, U.store.get("prefs.v3", {})),
+    prefs: Object.assign({}, PREF_DEFAULTS, rawPrefs),
     readNews: U.store.get("readNews.v1", {}),
     wireError: null
   };
@@ -159,7 +169,8 @@ window.GMT = window.GMT || {};
       if (p.wireMonth === null || p.wireMonth === undefined) {
         return app.loadMonths().then(() => app.loadCongressWire());
       }
-      if (p.wireMonth) params.month = p.wireMonth;
+      // If user typed a search query, search globally across all months
+      if (p.wireMonth && !p.wireQ) params.month = p.wireMonth;
 
       return G.data.Hub.getCongress("wire", null, params)
         .then(r => {
@@ -295,25 +306,54 @@ window.GMT = window.GMT || {};
           " · [E]dit [A]dd [R]eset [D]ata [T]ape [Esc]"
       }));
       bar.appendChild(grow);
-      // presets
-      const presets = el("div", { class: "seg", role: "group", "aria-label": "layout presets" });
-      [["CONGRESS", "CGS"], ["GLOBAL", "GLB"], ["EQUITIES", "EQ"], ["METALS", "MET"], ["NEWS", "NWS"]].forEach(([name, lab]) => {
+      // Workspace Desk Presets & Screen Organizer
+      const presets = el("div", { class: "seg", role: "group", "aria-label": "workspace desks" });
+      [
+        ["CONGRESS", "🏛️ CONGRESS"],
+        ["DOSSIER", "👤 DOSSIER"],
+        ["RANKINGS", "🏆 RANKINGS"],
+        ["MARKET", "📈 MARKETS"],
+        ["NEWS", "📰 LIVE NEWS"],
+        ["ALL", "✦ FULL DESK"]
+      ].forEach(([name, lab]) => {
         presets.appendChild(el("button", {
-          text: lab, title: "preset: " + name, "aria-pressed": G.state.prefs.preset === name,
+          text: lab,
+          title: "Switch to desk: " + name,
+          "aria-pressed": G.state.prefs.preset === name,
           id: "preset-" + name,
-          onclick: () => { G.layout.applyPreset(name); app.syncPresetButtons(); }
+          style: "font-weight:700;padding:2px 8px;font-size:10px;",
+          onclick: () => {
+            G.layout.applyPreset(name);
+            app.syncPresetButtons();
+            const canvas = document.getElementById("canvas");
+            if (canvas) canvas.scrollTo({ top: 0, behavior: "smooth" });
+          }
         }));
       });
       bar.appendChild(presets);
+
+      bar.appendChild(el("button", {
+        id: "btn-organize",
+        text: "📐 AUTO-ARRANGE",
+        title: "Auto-arrange and snap panels to top of screen",
+        style: "background:#000;color:var(--org);border:1px solid #000;font-weight:800;padding:2px 10px;font-size:10px;margin:2px 4px;border-radius:2px;cursor:pointer",
+        onclick: () => {
+          const cur = G.state.prefs.preset || "CONGRESS";
+          G.layout.applyPreset(cur);
+          app.syncPresetButtons();
+          const canvas = document.getElementById("canvas");
+          if (canvas) canvas.scrollTo({ top: 0, behavior: "smooth" });
+        }
+      }));
+
       bar.appendChild(el("button", { id: "btn-edit", text: "EDIT", title: "EDIT LAYOUT mode [E] — gates drag/resize", "aria-pressed": false, onclick: () => app.toggleEdit() }));
       bar.appendChild(el("button", { id: "btn-add", text: "+WIDGET", title: "add/restore widget [A]", onclick: () => app.toggleAddMenu() }));
       bar.appendChild(el("button", { id: "btn-reset", text: "RESET", title: "reset default layout [R]", onclick: () => { G.layout.resetDefault(); app.syncPresetButtons(); } }));
-      bar.appendChild(el("button", { id: "btn-pop", text: "POP", title: "standalone/pinned desktop window (mini session clock)", onclick: () => app.popout() }));
       bar.appendChild(el("button", { id: "btn-dstatus", text: "DATA", title: "DATA STATUS panel [D]", onclick: () => app.toggleDStatus() }));
       app.tickCmdClock();
     },
     syncPresetButtons() {
-      ["CONGRESS", "GLOBAL", "EQUITIES", "METALS", "NEWS"].forEach(n => {
+      ["CONGRESS", "MARKET", "NEWS", "ALL"].forEach(n => {
         const b = U.$("#preset-" + n);
         if (b) b.setAttribute("aria-pressed", G.state.prefs.preset === n);
       });
@@ -347,7 +387,7 @@ window.GMT = window.GMT || {};
           `<span class="num ${U.cls(r.chg)}">${U.arrow(r.chg)} ${U.fmtChg(r.chg, 2)}</span>` +
           `<span class="num ${U.cls(r.chgPct)}">${U.fmtPct(r.chgPct)}</span>` +
           `<span class="faint state-${U.esc(r.state)}" style="font-size:9px">${U.esc(r.state)}</span>`;
-        const open = () => { app.setFocus(r.sym); G.inspector.open("instrument", r); };
+        const open = () => { app.setFocus(r.sym); };
         it.addEventListener("click", open);
         it.addEventListener("keydown", e => { if (e.key === "Enter") open(); });
         return it;
@@ -577,7 +617,12 @@ window.GMT = window.GMT || {};
           app.buildTape();
           const tp = U.$("#tape-pause");
           if (tp && G.state.prefs.tapePaused) { tp.textContent = "▶"; tp.setAttribute("aria-pressed", "true"); }
-          G.layout.load();
+          if (localStorage.getItem("gmt.layout_spacious_v5") !== "true") {
+            G.layout.applyPreset("CONGRESS");
+            localStorage.setItem("gmt.layout_spacious_v5", "true");
+          } else {
+            G.layout.load();
+          }
           G.layout.mount();
           app.renderAll();
           app.syncAddMenu();

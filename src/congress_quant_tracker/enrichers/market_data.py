@@ -41,8 +41,8 @@ _mem_hist: dict[str, dict[str, Any]] = {}
 _mem_quote: dict[str, dict[str, Any]] = {}
 
 # Conservative defaults — Yahoo throttles aggressive scrapers
-MIN_INTERVAL_SEC = 1.25
-CACHE_TTL_SEC = 12 * 3600  # 12 hours
+MIN_INTERVAL_SEC = 0.05
+CACHE_TTL_SEC = 24 * 3600  # 24 hours disk cache
 MAX_HISTORY_DAYS = 400
 QUOTE_TTL_SEC = 15 * 60  # 15 min for "current" price
 
@@ -99,11 +99,11 @@ def _fetch_history(ticker: str, start: date, end: date) -> list[dict]:
         return []
 
     ticker = ticker.upper().strip()
-    # expand window slightly
+    # expand window slightly, clamp end date to today to avoid Yahoo future date rejection
     start = start - timedelta(days=5)
-    end = end + timedelta(days=2)
+    end = min(end + timedelta(days=1), date.today())
     if end <= start:
-        end = start + timedelta(days=7)
+        start = end - timedelta(days=7)
 
     _throttle()
     try:
@@ -132,27 +132,84 @@ def _fetch_history(ticker: str, start: date, end: date) -> list[dict]:
         if hasattr(df.columns, "levels") and getattr(df.columns, "nlevels", 1) > 1:
             df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
 
+        def _val(row_dict, key):
+            v = row_dict.get(key)
+            if v is not None and hasattr(v, "iloc"):
+                v = v.iloc[0]
+            if v is not None and (isinstance(v, float) and v != v):
+                return None
+            return v
+
         rows = []
         for idx, row in df.iterrows():
             try:
                 d = idx.date() if hasattr(idx, "date") else date.fromisoformat(str(idx)[:10])
             except Exception:
                 continue
-            close = row.get("Close")
-            if close is None or (isinstance(close, float) and close != close):  # NaN
+            close = _val(row, "Close")
+            if close is None:
                 continue
             rows.append({
                 "date": d.isoformat(),
                 "close": float(close),
-                "open": float(row["Open"]) if "Open" in row and row["Open"] == row["Open"] else None,
-                "high": float(row["High"]) if "High" in row and row["High"] == row["High"] else None,
-                "low": float(row["Low"]) if "Low" in row and row["Low"] == row["Low"] else None,
-                "volume": int(row["Volume"]) if "Volume" in row and row["Volume"] == row["Volume"] else None,
+                "open": float(_val(row, "Open")) if _val(row, "Open") is not None else None,
+                "high": float(_val(row, "High")) if _val(row, "High") is not None else None,
+                "low": float(_val(row, "Low")) if _val(row, "Low") is not None else None,
+                "volume": int(_val(row, "Volume")) if _val(row, "Volume") is not None else None,
             })
         return rows
     except Exception as e:
         logger.warning("yfinance history failed %s: %s", ticker, e)
         return []
+
+
+def prefetch_tickers(tickers: list[str]) -> None:
+    """Batch download and disk-cache daily price bars for multiple tickers."""
+    if not _enabled() or not tickers:
+        return
+    uncached = [t.upper().strip() for t in set(tickers) if t and not _load_disk(t.upper().strip())]
+    if not uncached:
+        return
+
+    end = date.today() + timedelta(days=1)
+    start = end - timedelta(days=MAX_HISTORY_DAYS + 10)
+    try:
+        df = yf.download(
+            tickers=uncached if len(uncached) > 1 else uncached[0],
+            start=start.isoformat(),
+            end=end.isoformat(),
+            progress=False,
+            auto_adjust=True,
+            threads=True,
+            group_by="ticker" if len(uncached) > 1 else None,
+        )
+        if df is None or df.empty:
+            return
+        for tk in uncached:
+            try:
+                sub = df[tk] if (len(uncached) > 1 and hasattr(df, "columns") and hasattr(df.columns, "levels") and tk in df.columns.levels[0]) else df
+                rows = []
+                for idx, row in sub.iterrows():
+                    try:
+                        d = idx.date() if hasattr(idx, "date") else date.fromisoformat(str(idx)[:10])
+                        close = row.get("Close") if hasattr(row, "get") else (row["Close"] if "Close" in row.index else None)
+                        if close is not None and not (isinstance(close, float) and close != close):
+                            rows.append({
+                                "date": d.isoformat(),
+                                "close": float(close),
+                                "open": float(row.get("Open") or close),
+                                "high": float(row.get("High") or close),
+                                "low": float(row.get("Low") or close),
+                                "volume": int(row.get("Volume") or 0),
+                            })
+                    except Exception:
+                        continue
+                if rows:
+                    _save_disk(tk, {"fetched_at": time.time(), "bars": rows})
+            except Exception:
+                continue
+    except Exception as e:
+        logger.debug(f"prefetch_tickers batch error: {e}")
 
 
 def get_history(
@@ -324,16 +381,17 @@ def trade_performance(
             else:
                 pnl = raw
 
-        # chart from trade date → today
-        bars = get_history(ticker, trade_date, date.today())
-        if len(bars) > chart_points:
-            # downsample evenly
-            step = max(1, len(bars) // chart_points)
-            chart = bars[::step]
-            if chart[-1] != bars[-1]:
-                chart.append(bars[-1])
-        else:
-            chart = bars
+        # chart from trade date → today (skip if chart_points <= 0 for speed)
+        chart = []
+        if chart_points and chart_points > 0:
+            bars = get_history(ticker, trade_date, date.today())
+            if len(bars) > chart_points:
+                step = max(1, len(bars) // chart_points)
+                chart = bars[::step]
+                if chart and chart[-1] != bars[-1]:
+                    chart.append(bars[-1])
+            else:
+                chart = bars
 
         return {
             "ticker": ticker.upper(),

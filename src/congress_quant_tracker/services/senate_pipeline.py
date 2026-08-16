@@ -89,7 +89,7 @@ class SenatePipeline:
             use = strategy
             if strategy == "auto":
                 use = "efd" if probe.get("reachable") else "congressinvests"
-                print(f"[Senate] auto → {use}")
+                print(f"[Senate] auto -> {use}")
 
             if use == "efd":
                 try:
@@ -114,7 +114,7 @@ class SenatePipeline:
                                 logger.warning("PTR parse fail %s: %s", rep.get("url"), e)
                     stats["strategy_used"] = "efd_http"
                 except Exception as e:
-                    print(f"[Senate] eFD HTTP failed ({e}); trying Playwright…")
+                    print(f"[Senate] eFD HTTP failed ({e}); trying Playwright...")
                     try:
                         fetcher = SenateEfdPlaywrightFetcher(headless=headless)
                         reports = fetcher.fetch_ptr_index(max_rows=max_efd_reports)
@@ -153,7 +153,7 @@ class SenatePipeline:
                     session.rollback()
             session.commit()
 
-            print("[Senate] Scoring…")
+            print("[Senate] Scoring...")
             self._score(session, stats)
             self._update_pols(session)
 

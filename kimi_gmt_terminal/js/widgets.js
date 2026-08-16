@@ -50,14 +50,14 @@ window.GMT = window.GMT || {};
             `<td class="num ${U.cls(r.chgPct)}">${U.fmtPct(r.chgPct)}</td>` +
             `<td class="state-${U.esc(r.state)}">${U.esc(r.state)}</td>` +
             `<td class="faint">${U.esc(r.src)}</td><td class="faint">${U.esc(r.asof.slice(11, 16))} ET</td>`;
-          const open = () => { G.app.setFocus(r.sym); G.inspector.open("instrument", r); };
+          const open = () => { G.app.setFocus(r.sym); };
           tr.addEventListener("click", open);
           tr.addEventListener("keydown", e => { if (e.key === "Enter") open(); });
           tb.appendChild(tr);
         });
         tbl.appendChild(tb);
         body.appendChild(tbl);
-        body.appendChild(el("div", { class: "pad faint", text: "click row → Inspector + focus asset · fixed-width tabular columns prevent digit jitter", style: "font-size:9px;padding:3px 8px" }));
+        body.appendChild(el("div", { class: "pad faint", text: "click row → focus asset & update chart · fixed-width tabular columns prevent digit jitter", style: "font-size:9px;padding:3px 8px" }));
       }
     },
 

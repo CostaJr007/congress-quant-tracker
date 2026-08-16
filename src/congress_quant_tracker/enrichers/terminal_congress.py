@@ -336,6 +336,69 @@ def build_holders(session, ticker: str) -> dict[str, Any]:
             ent["last_side"] = "BUY" if (t.transaction_type or "").lower() == "buy" else "SELL"
             ent["last_score"] = t.score or 0
 
+    total_buys = 0
+    total_sells = 0
+    buy_vol = 0
+    sell_vol = 0
+    calls_count = 0
+    puts_count = 0
+    party_vol = {"D": 0, "R": 0, "I": 0}
+    party_trades = {"D": 0, "R": 0, "I": 0}
+
+    for t in trades:
+        is_buy = (t.transaction_type or "").lower() in ("buy", "purchase")
+        vol = t.value_max or 0
+        if is_buy:
+            total_buys += 1
+            buy_vol += vol
+        else:
+            total_sells += 1
+            sell_vol += vol
+
+        at = (t.asset_type or "").lower()
+        an = (t.asset_name or "").lower()
+        if "call" in at or "call" in an:
+            calls_count += 1
+        elif "put" in at or "put" in an:
+            puts_count += 1
+
+        pol_party = t.politician.party if t.politician and t.politician.party else "I"
+        pol_party = pol_party.upper()
+        if pol_party in party_vol:
+            party_vol[pol_party] += vol
+            party_trades[pol_party] += 1
+
+    total_cnt = max(1, total_buys + total_sells)
+    buy_pct = round((total_buys / total_cnt) * 100, 1)
+    sell_pct = round((total_sells / total_cnt) * 100, 1)
+    pcr_ratio = round(total_sells / max(1, total_buys), 2)
+
+    if buy_pct >= 65:
+        sentiment = "BULLISH ACCUMULATION"
+        sentiment_col = "#00C176"
+    elif buy_pct <= 35:
+        sentiment = "BEARISH DISTRIBUTION"
+        sentiment_col = "#FF4D4F"
+    else:
+        sentiment = "NEUTRAL / BALANCED"
+        sentiment_col = "#F28C00"
+
+    positioning = {
+        "buy_count": total_buys,
+        "sell_count": total_sells,
+        "buy_volume": buy_vol,
+        "sell_volume": sell_vol,
+        "buy_pct": buy_pct,
+        "sell_pct": sell_pct,
+        "put_call_ratio": pcr_ratio,
+        "options_calls": calls_count,
+        "options_puts": puts_count,
+        "sentiment": sentiment,
+        "sentiment_color": sentiment_col,
+        "party_trades": party_trades,
+        "party_volume": party_vol,
+    }
+
     holders = sorted(by_pol.values(), key=lambda x: (-x["trades"], -x["volume"]))
     house = sum(1 for h in holders if (h.get("chamber") or "").lower() == "house")
     senate = sum(1 for h in holders if (h.get("chamber") or "").lower() == "senate")
@@ -346,6 +409,7 @@ def build_holders(session, ticker: str) -> dict[str, Any]:
             "name": company.name if company else (trades[0].asset_name if trades else ticker),
             "sector": company.sector if company else (trades[0].sector if trades else None),
             "holders": holders,
+            "positioning": positioning,
             "unique_politicians": len(holders),
             "house_count": house,
             "senate_count": senate,
@@ -480,9 +544,40 @@ def build_sector(session, sector: str) -> dict[str, Any]:
     house = sum(1 for p in politicians if (p.get("chamber") or "").lower() == "house")
     senate = sum(1 for p in politicians if (p.get("chamber") or "").lower() == "senate")
 
+    sec_buys = sum(1 for t in trades if (t.transaction_type or "").lower() in ("buy", "purchase"))
+    sec_sells = sum(1 for t in trades if (t.transaction_type or "").lower() in ("sell", "sale"))
+    sec_buy_vol = sum(t.value_max or 0 for t in trades if (t.transaction_type or "").lower() in ("buy", "purchase"))
+    sec_sell_vol = sum(t.value_max or 0 for t in trades if (t.transaction_type or "").lower() in ("sell", "sale"))
+    total_sec_trades = max(1, sec_buys + sec_sells)
+    sec_buy_pct = round((sec_buys / total_sec_trades) * 100, 1)
+    sec_pcr = round(sec_sells / max(1, sec_buys), 2)
+
+    if sec_buy_pct >= 60:
+        sec_sentiment = "BULLISH"
+        sec_sentiment_col = "#00C176"
+    elif sec_buy_pct <= 40:
+        sec_sentiment = "BEARISH"
+        sec_sentiment_col = "#FF4D4F"
+    else:
+        sec_sentiment = "NEUTRAL"
+        sec_sentiment_col = "#F28C00"
+
+    positioning = {
+        "buy_count": sec_buys,
+        "sell_count": sec_sells,
+        "buy_volume": sec_buy_vol,
+        "sell_volume": sec_sell_vol,
+        "buy_pct": sec_buy_pct,
+        "sell_pct": round(100 - sec_buy_pct, 1),
+        "put_call_ratio": sec_pcr,
+        "sentiment": sec_sentiment,
+        "sentiment_color": sec_sentiment_col,
+    }
+
     return {
         "data": {
             "sector": sector,
+            "positioning": positioning,
             "politicians": politicians[:60],
             "tickers": tickers[:40],
             "house_count": house,
@@ -490,6 +585,7 @@ def build_sector(session, sector: str) -> dict[str, Any]:
             "unique_politicians": len(politicians),
             "unique_tickers": len(tickers),
             "total_trades": len(trades),
+            "total_volume": sum(t.value_max or 0 for t in trades),
         },
         "asof": _now_iso(),
         "mode": "LIVE",
@@ -614,7 +710,7 @@ def build_returns_leaderboard(
     chamber: Optional[str] = None,
     mode: str = "trade",
     limit: int = 40,
-    max_tickers: int = 36,
+    max_tickers: int = 15,
 ) -> dict[str, Any]:
     """Rank trades (or members) by estimated price return since trade date.
 
@@ -655,17 +751,26 @@ def build_returns_leaderboard(
             query = query.filter(Politician.chamber == ch)
 
     # pull a pool larger than limit so after price-filter we still have ranks
-    pool = query.limit(min(max(limit * 4, 80), 250)).all()
+    pool_limit = 300 if month else 800
+    pool = query.limit(pool_limit).all()
     rows_raw = [trade_row(t) for t in pool]
 
     # unique tickers (prefer more recent first) — cap yfinance load
+    max_tk = max_tickers if max_tickers and max_tickers > 15 else (50 if month else 80)
     seen_tk: list[str] = []
     for r in rows_raw:
         tk = (r.get("ticker") or "").upper()
         if tk and tk not in seen_tk:
             seen_tk.append(tk)
-        if len(seen_tk) >= max_tickers:
+        if len(seen_tk) >= max_tk:
             break
+
+    # Batch prefetch price history into disk cache
+    try:
+        from congress_quant_tracker.enrichers.market_data import prefetch_tickers
+        prefetch_tickers(seen_tk)
+    except Exception:
+        pass
 
     ranked: list[dict[str, Any]] = []
     skipped = 0
@@ -681,7 +786,7 @@ def build_returns_leaderboard(
             value_min=r.get("amount_min"),
             value_max=r.get("amount_max"),
             transaction_type="buy" if r.get("side") == "BUY" else "sell",
-            chart_points=8,
+            chart_points=0,
         )
         chg = perf.get("change_pct")
         if chg is None:
