@@ -100,6 +100,12 @@ class DataUpdateService:
             session.commit()
             # ASCII-only: Windows consoles often fail on emoji (cp1252)
             print(f"\n[OK] Update complete! Added {stats['trades_added']} new trades")
+            try:
+                from congress_quant_tracker.notifiers.discord_notifier import notify_pipeline_result
+
+                notify_pipeline_result("full_update", stats)
+            except Exception:
+                pass
 
         except Exception as e:
             # Never let logging/encoding turn a successful run into a crash
@@ -256,13 +262,16 @@ class DataUpdateService:
             for pid, p in pols.items()
             if p.committees
         }
-        sector_map = {
-            tkr: c.sector for tkr, c in companies.items() if c.sector
-        }
-        # Prefer sector already on trade
+        from congress_quant_tracker.enrichers.sectors import resolve_sector, scorer_sector
+
+        sector_map: dict[str, str] = {}
+        for tkr, c in companies.items():
+            if c.sector:
+                sector_map[tkr] = scorer_sector(c.sector)
         for t in trades:
-            if t.sector and t.ticker:
-                sector_map.setdefault(t.ticker, t.sector)
+            label = resolve_sector(t.ticker, t.sector, sector_map.get(t.ticker or ""))
+            if label and t.ticker:
+                sector_map[t.ticker] = scorer_sector(label)
 
         scored = self.scorer.score_batch(trade_dicts, committee_map, sector_map)
         by_id = {s["id"]: s for s in scored}
@@ -353,6 +362,13 @@ class DataUpdateService:
                 stats["options_added"] += 1
 
             session.commit()
+            from congress_quant_tracker.enrichers.sectors import apply_sectors_to_session
+
+            sector_stats = apply_sectors_to_session(session)
+            stats["sectors_trades"] = sector_stats.get("trades_updated", 0)
+            stats["sectors_companies"] = sector_stats.get("companies_updated", 0) + sector_stats.get(
+                "companies_created", 0
+            )
             self._score_all_trades(session, stats, force=True)
             self._update_politician_stats(session)
             return stats

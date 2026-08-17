@@ -81,13 +81,15 @@ class TradeScorer:
 
     def score_committee_match(self, committees: List[str], sector: str) -> Tuple[int, str]:
         if not committees or not sector: return 0, ""
+        from congress_quant_tracker.enrichers.sectors import scorer_sector
+        sector_canon = scorer_sector(sector) or sector
         for comm in committees:
             if "Ways and Means" in comm:
-                return POINTS_WAYS_AND_MEANS, f"Ways & Means → {sector} (+{POINTS_WAYS_AND_MEANS})"
+                return POINTS_WAYS_AND_MEANS, f"Ways & Means → {sector_canon} (+{POINTS_WAYS_AND_MEANS})"
         for comm in committees:
             for keyword, sectors in COMMITTEE_SECTOR_MAP.items():
-                if keyword.lower() in comm.lower() and sector in sectors:
-                    return POINTS_COMMITTEE_MATCH, f"{comm} → {sector} (+{POINTS_COMMITTEE_MATCH})"
+                if keyword.lower() in comm.lower() and (sector in sectors or sector_canon in sectors):
+                    return POINTS_COMMITTEE_MATCH, f"{comm} → {sector_canon} (+{POINTS_COMMITTEE_MATCH})"
         return 0, ""
 
     def score_trade_size(self, value_max: int) -> Tuple[int, str]:

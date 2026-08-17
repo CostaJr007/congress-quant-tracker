@@ -46,9 +46,7 @@ def _parse_us_date(s: str) -> Optional[date]:
     return None
 
 
-def probe_efd_access(timeout: float = 20.0, proxy: str | None = None) -> dict[str, Any]:
-    """Check whether this network (or optional proxy) can reach efdsearch."""
-    proxy = (proxy if proxy is not None else settings.HTTP_PROXY) or None
+def _probe_once(timeout: float, proxy: str | None) -> dict[str, Any]:
     try:
         kwargs: dict[str, Any] = {
             "timeout": timeout,
@@ -80,6 +78,36 @@ def probe_efd_access(timeout: float = 20.0, proxy: str | None = None) -> dict[st
             "error": str(e),
             "proxy": proxy,
         }
+
+
+def probe_efd_access(timeout: float = 20.0, proxy: str | None = None) -> dict[str, Any]:
+    """Check whether this network (or optional proxy) can reach efdsearch.
+
+    Tries direct first, then the configured proxy. A dead proxy must not
+    hide a working direct path.
+    """
+    configured = (proxy if proxy is not None else settings.HTTP_PROXY) or None
+    attempts: list[str | None] = [None]
+    if configured:
+        attempts.append(configured)
+
+    last: dict[str, Any] = {"reachable": False}
+    tried: list[dict[str, Any]] = []
+    for px in attempts:
+        result = _probe_once(timeout, px)
+        tried.append(result)
+        last = result
+        if result.get("reachable"):
+            result["attempts"] = [
+                {"proxy": t.get("proxy"), "reachable": t.get("reachable"), "error": t.get("error")}
+                for t in tried
+            ]
+            return result
+    last["attempts"] = [
+        {"proxy": t.get("proxy"), "reachable": t.get("reachable"), "error": t.get("error")}
+        for t in tried
+    ]
+    return last
 
 
 # ── Strategy A: CongressInvests ────────────────────────────────────────

@@ -14,56 +14,9 @@ from typing import Any, Optional
 from sqlalchemy import case, desc, func, or_
 
 from congress_quant_tracker.database.models import Company, Politician, Trade
+from congress_quant_tracker.enrichers.sectors import TICKER_SECTOR, resolve_sector
 
 logger = logging.getLogger(__name__)
-
-# Fallback sector map when Trade.sector / Company.sector are empty (common in this DB).
-# Keys uppercase tickers → sector label used by SECTOR DESK.
-TICKER_SECTOR: dict[str, str] = {
-    # Tech / AI
-    "AAPL": "Technology", "MSFT": "Technology", "NVDA": "Technology", "GOOGL": "Technology",
-    "GOOG": "Technology", "META": "Technology", "AMZN": "Technology", "AMD": "Technology",
-    "AVGO": "Technology", "TSM": "Technology", "ASML": "Technology", "ORCL": "Technology",
-    "CRM": "Technology", "PLTR": "Technology", "MU": "Technology", "INTC": "Technology",
-    "TSLA": "Technology", "NFLX": "Technology", "ADBE": "Technology", "CSCO": "Technology",
-    "QCOM": "Technology", "IBM": "Technology", "NOW": "Technology", "SNOW": "Technology",
-    "PANW": "Technology", "CRWD": "Technology", "NET": "Technology", "SHOP": "Technology",
-    "QCOM": "Technology", "AMAT": "Technology", "LRCX": "Technology", "KLAC": "Technology",
-    "SNPS": "Technology", "CDNS": "Technology", "ANSS": "Technology", "AMZN": "Technology",
-    "TSLA": "Technology", "NFLX": "Technology", "ADBE": "Technology", "CSCO": "Technology",
-    "IBM": "Technology", "NOW": "Technology", "SNOW": "Technology",
-    # Energy
-    "XOM": "Energy", "CVX": "Energy", "COP": "Energy", "SLB": "Energy", "EOG": "Energy",
-    "OXY": "Energy", "MPC": "Energy", "PSX": "Energy", "VLO": "Energy", "KMI": "Energy",
-    "WMB": "Energy", "HAL": "Energy", "BKR": "Energy", "DVN": "Energy", "FANG": "Energy",
-    "OKE": "Energy",
-    # Financials
-    "JPM": "Financials", "BAC": "Financials", "GS": "Financials", "MS": "Financials",
-    "WFC": "Financials", "BLK": "Financials", "V": "Financials", "MA": "Financials",
-    "AXP": "Financials", "C": "Financials", "SCHW": "Financials", "PYPL": "Financials",
-    "BRK.B": "Financials", "BRKB": "Financials", "USB": "Financials", "PNC": "Financials",
-    "COF": "Financials", "TFC": "Financials", "SPGI": "Financials", "BK": "Financials",
-    # Healthcare
-    "UNH": "Healthcare", "JNJ": "Healthcare", "LLY": "Healthcare", "PFE": "Healthcare",
-    "ABBV": "Healthcare", "MRK": "Healthcare", "TMO": "Healthcare", "ABT": "Healthcare",
-    # Consumer
-    "HD": "Consumer", "WMT": "Consumer", "COST": "Consumer", "MCD": "Consumer",
-    "NKE": "Consumer", "SBUX": "Consumer", "TGT": "Consumer", "LOW": "Consumer",
-    # Industrials / other
-    "BA": "Industrials", "CAT": "Industrials", "GE": "Industrials", "HON": "Industrials",
-    "LMT": "Industrials", "RTX": "Industrials", "UPS": "Industrials",
-    "LTH": "Consumer", "CHRW": "Industrials", "STE": "Healthcare",
-}
-
-
-def resolve_sector(ticker: Optional[str], trade_sector: Optional[str] = None, company_sector: Optional[str] = None) -> Optional[str]:
-    if trade_sector and str(trade_sector).strip():
-        return str(trade_sector).strip()
-    if company_sector and str(company_sector).strip():
-        return str(company_sector).strip()
-    if ticker:
-        return TICKER_SECTOR.get(ticker.upper().strip())
-    return None
 
 
 def _now_iso() -> str:

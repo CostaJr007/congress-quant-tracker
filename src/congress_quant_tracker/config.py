@@ -55,6 +55,8 @@ class Settings:
     # Example: http://15.204.205.208:7777
     HTTP_PROXY: str = os.getenv("HTTP_PROXY", "") or os.getenv("HTTPS_PROXY", "")
 
+    DISCORD_WEBHOOK_URL: str = os.getenv("DISCORD_WEBHOOK_URL", "")
+
     def ensure_dirs(self) -> None:
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.PDF_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)

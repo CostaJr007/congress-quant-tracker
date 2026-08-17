@@ -2,11 +2,15 @@
 
 import requests
 import os
-from typing import List, Dict
+from typing import List, Dict, Optional
 import logging
 
 logger = logging.getLogger(__name__)
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+try:
+    from congress_quant_tracker.config import settings
+    DISCORD_WEBHOOK_URL = settings.DISCORD_WEBHOOK_URL or os.getenv("DISCORD_WEBHOOK_URL", "")
+except Exception:
+    DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 
 
 def send_trade_alert(trade: Dict, pdf_url: str = "") -> bool:
@@ -61,4 +65,20 @@ def send_daily_summary(trades: List[Dict], filings_count: int, new_trades: int) 
         return resp.status_code in (200, 204)
     except Exception as e:
         logger.error(f"Discord summary failed: {e}")
+        return False
+
+
+def notify_pipeline_result(source: str, stats: Dict, flagged: Optional[List[Dict]] = None) -> bool:
+    """Best-effort Discord ping after a pipeline run. Never raises."""
+    try:
+        added = int(stats.get("trades_added") or 0)
+        fetched = int(stats.get("trades_fetched") or stats.get("trades_seen") or 0)
+        if added:
+            send_daily_summary(flagged or [], filings_count=fetched, new_trades=added)
+        for trade in (flagged or [])[:8]:
+            if (trade.get("score") or 0) >= 51 or trade.get("tag") in ("suspicious", "high_alert"):
+                send_trade_alert(trade, trade.get("pdf_url") or "")
+        return True
+    except Exception as e:
+        logger.debug("Discord pipeline notify skipped: %s", e)
         return False

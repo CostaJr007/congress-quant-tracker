@@ -127,6 +127,8 @@ def main():
             bio_id = info["bioguide_id"]
             if pol.bioguide_id != bio_id:
                 pol.bioguide_id = bio_id
+                updated += 1
+            if bio_id and pol.photo_url != f"/politicians/{bio_id}.jpg":
                 pol.photo_url = f"/politicians/{bio_id}.jpg"
                 updated += 1
             if pol.party != info["party"] and info["party"] in ("D", "R", "I"):

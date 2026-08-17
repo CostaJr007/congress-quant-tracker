@@ -156,7 +156,13 @@ class OfficialHousePipeline:
                         continue
 
             # Score new/zero-score trades
-            print("[House Official] Scoring…")
+            print("[House Official] Scoring...")
+            try:
+                from congress_quant_tracker.enrichers.sectors import apply_sectors_to_session
+
+                apply_sectors_to_session(session)
+            except Exception:
+                pass
             score_stats = {"trades_scored": 0}
             self._score_unscored(session, score_stats)
             stats["trades_scored"] = score_stats["trades_scored"]
@@ -167,7 +173,13 @@ class OfficialHousePipeline:
             log.completed_at = datetime.utcnow()
             log.details = str(stats)
             session.commit()
-            print(f"[OK] House official done: {stats}")
+            print("[OK] House official done: %s" % {k: stats[k] for k in stats if k != "parse_methods"})
+            try:
+                from congress_quant_tracker.notifiers.discord_notifier import notify_pipeline_result
+
+                notify_pipeline_result("house_official", stats)
+            except Exception:
+                pass
             return stats
 
         except Exception as e:
@@ -345,7 +357,14 @@ class OfficialHousePipeline:
             for pid, p in pols.items()
             if p.committees
         }
-        scored = self.scorer.score_batch(trade_dicts, committee_map, {})
+        from congress_quant_tracker.enrichers.sectors import resolve_sector, scorer_sector
+
+        sector_map = {}
+        for t in trades:
+            label = resolve_sector(t.ticker, t.sector)
+            if label:
+                sector_map[t.ticker] = scorer_sector(label)
+        scored = self.scorer.score_batch(trade_dicts, committee_map, sector_map)
         by_id = {s["id"]: s for s in scored}
         for t in trades:
             s = by_id.get(t.id)

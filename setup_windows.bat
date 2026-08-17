@@ -15,7 +15,12 @@ if errorlevel 1 (
 
 REM Install dependencies
 echo Installing dependencies...
-pip install sqlalchemy pdfplumber anthropic yfinance requests pandas numpy plotly python-dotenv apscheduler pydantic httpx beautifulsoup4 lxml tenacity tqdm streamlit
+where uv >nul 2>&1
+if errorlevel 1 (
+    pip install -e .
+) else (
+    uv sync
+)
 
 echo.
 echo ============================================================
@@ -23,8 +28,10 @@ echo Setup complete!
 echo ============================================================
 echo.
 echo Next steps:
-echo 1. Edit .env file with your API keys
-echo 2. Run: python scripts\daily_update.py --once
-echo 3. Run: streamlit run dashboard\app.py
+echo 1. Copy .env.example to .env and fill API keys if needed
+echo 2. uv run python scripts\enrich_all.py
+echo 3. uv run python server\api_server.py
+echo 4. Optional UI: cd web_fused ^&^& npm install ^&^& npm run dev
+echo    Terminal: http://localhost:8000/terminal/
 echo.
 pause

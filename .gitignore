@@ -55,8 +55,8 @@ Desktop.ini
 
 # Scrapes / clones / junk
 disclose_clone/
-# Root-only junk (do NOT use bare D*/ — that ignores every folder named data/)
-/D*/
+# Accidental Windows drive-letter dump (not dashboard/ or data/)
+/D?:/
 clone_*.py
 run_*clone*.bat
 *_check*.py

@@ -32,6 +32,10 @@ class CompanyEnricher:
             "beta": None,
         }
 
+        from congress_quant_tracker.enrichers.sectors import TICKER_SECTOR
+
+        info["sector"] = info["sector"] or TICKER_SECTOR.get(ticker.upper())
+
         if settings.NO_YF or yf is None:
             self.CACHE[ticker] = info
             return info
@@ -42,7 +46,7 @@ class CompanyEnricher:
 
             if ticker_info:
                 info["name"] = ticker_info.get("longName") or ticker_info.get("shortName") or ticker
-                info["sector"] = ticker_info.get("sector")
+                info["sector"] = ticker_info.get("sector") or info["sector"]
                 info["industry"] = ticker_info.get("industry")
                 info["market_cap"] = ticker_info.get("marketCap")
                 info["beta"] = ticker_info.get("beta")
@@ -96,6 +100,17 @@ class CompanyEnricher:
 
         new_tickers = [t for t in traded_tickers if t.upper() not in existing_tickers]
         count = 0
+
+        from congress_quant_tracker.enrichers.sectors import TICKER_SECTOR
+
+        # Backfill static sector onto existing companies first (no network)
+        for company in session.query(Company).filter(
+            (Company.sector.is_(None)) | (Company.sector == "")
+        ).all():
+            mapped = TICKER_SECTOR.get((company.ticker or "").upper())
+            if mapped:
+                company.sector = mapped
+                count += 1
 
         for ticker in new_tickers:
             self.get_or_create_company(session, ticker)

@@ -75,8 +75,10 @@ Variáveis úteis:
 |----------|---------|--------|
 | `MARKET_DATA_ENABLED` | `1` | yfinance (charts, returns, enrich) |
 | `NO_YF` | `0` | desliga yfinance no scorer (mercado pode continuar com MARKET_DATA) |
-| `GROQ_API_KEY` | — | extração LLM de PDFs (opcional) |
+| `GROQ_API_KEY` | — | extração LLM de PDFs + Copilot (opcional) |
+| `OPENAI_API_KEY` | — | Copilot GPT (opcional) |
 | `TAVILY_API_KEY` | — | busca / resolve (opcional) |
+| `DISCORD_WEBHOOK_URL` | — | alerta de trades novos / flagged |
 | `HTTP_PROXY` | — | proxy HTTPS p/ Senate eFD se bloqueado |
 | `DATABASE_URL` | SQLite local | URL do banco |
 
@@ -103,10 +105,13 @@ npm run dev -- -p 3000
 # House official
 uv run python scripts/update_official.py
 
-# Senate (pode precisar proxy)
+# Senate (pode precisar proxy; se o proxy cair, tenta direto)
 uv run python scripts/update_senate.py
 
-# Re-score
+# Setores + fotos + opções + re-score (sem yfinance)
+uv run python scripts/enrich_all.py
+
+# Re-score apenas
 uv run python scripts/rescore.py
 ```
 
@@ -144,6 +149,8 @@ Layout editável (EDIT / drag) salvo em `localStorage` (`layout.v3`).
 | `GET /api/terminal/congress/politician?name=` | Book do membro |
 | `GET /api/terminal/congress/returns` | Leaderboard de retornos |
 | `GET /api/terminal/market/{ticker}?from_date=` | OHLCV diário p/ chart |
+| `GET /api/analyze/overview` | Party / setor / opções / suspicious |
+| `POST /api/pipeline/enrich` | Setores + fotos + rescore |
 
 Config LIVE do front: `kimi_gmt_terminal/js/live.config.js` (same-origin).
 
@@ -214,6 +221,8 @@ gh repo edit CostaJr007/congress-quant-tracker --visibility private
 | `uv run python scripts/update_official.py` | House |
 | `uv run python scripts/update_senate.py` | Senate |
 | `uv run python scripts/rescore.py` | Re-score trades |
+| `uv run python scripts/enrich_all.py` | Setores + fotos + opções + rescore |
+| `uv run pytest` | Testes unitários |
 
 ---
 
@@ -236,6 +245,9 @@ Não é aconselhamento de investimento. Não copiar marcas/logos Bloomberg.
 
 ## Changelog (merge terminal)
 
+- **web_fused** Next.js (dashboard, trades, politicians, stocks, signals, leaderboard, analyze)  
+- Analyzers ligados em `/api/analyze/*` + Discord opcional após pipelines  
+- Setores estáticos + rescore + fotos; Senate eFD tenta direto se o proxy cair  
 - Integração **CI://TERMINAL** Bloomberg × ASCII + adapters LIVE/DEMO  
 - yfinance bulk (tape, heatmap, metals, chart diário)  
 - Wire por mês + cards de membros com **fotos**  

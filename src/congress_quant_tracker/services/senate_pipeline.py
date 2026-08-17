@@ -154,6 +154,12 @@ class SenatePipeline:
             session.commit()
 
             print("[Senate] Scoring...")
+            try:
+                from congress_quant_tracker.enrichers.sectors import apply_sectors_to_session
+
+                apply_sectors_to_session(session)
+            except Exception:
+                pass
             self._score(session, stats)
             self._update_pols(session)
 
@@ -162,7 +168,17 @@ class SenatePipeline:
             log.completed_at = datetime.utcnow()
             log.details = str(stats)
             session.commit()
-            print(f"[OK] Senate done: {stats}")
+            print("[OK] Senate done: trades_added=%s fetched=%s strategy=%s" % (
+                stats.get("trades_added"),
+                stats.get("trades_fetched"),
+                stats.get("strategy_used"),
+            ))
+            try:
+                from congress_quant_tracker.notifiers.discord_notifier import notify_pipeline_result
+
+                notify_pipeline_result("senate_update", stats)
+            except Exception:
+                pass
             return stats
 
         except Exception as e:
@@ -278,7 +294,14 @@ class SenatePipeline:
                 "asset_type": t.asset_type or "stock",
                 "owner": t.owner or "",
             })
-        scored = self.scorer.score_batch(dicts, {}, {})
+        from congress_quant_tracker.enrichers.sectors import resolve_sector, scorer_sector
+
+        sector_map = {}
+        for t in trades:
+            label = resolve_sector(t.ticker, t.sector)
+            if label:
+                sector_map[t.ticker] = scorer_sector(label)
+        scored = self.scorer.score_batch(dicts, {}, sector_map)
         by_id = {s["id"]: s for s in scored}
         for t in trades:
             s = by_id.get(t.id)

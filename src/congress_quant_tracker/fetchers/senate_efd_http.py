@@ -52,7 +52,15 @@ def _parse_us_date(s: str) -> Optional[date]:
 
 class SenateEfdHttpClient:
     def __init__(self, proxy: str | None = None) -> None:
-        self.proxy = (proxy if proxy is not None else settings.HTTP_PROXY) or None
+        if proxy is not None:
+            self.proxy = proxy or None
+        else:
+            from congress_quant_tracker.fetchers.senate_official import probe_efd_access
+
+            probe = probe_efd_access()
+            self.proxy = probe.get("proxy") if probe.get("reachable") else (
+                settings.HTTP_PROXY or None
+            )
         self.client = httpx.Client(
             proxy=self.proxy,
             timeout=settings.FETCH_TIMEOUT_SECONDS,

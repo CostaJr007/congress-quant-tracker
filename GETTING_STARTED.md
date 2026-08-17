@@ -26,6 +26,8 @@ cd web_fused
 npm run dev -- -p 3000
 ```
 
+Ou um atalho: `run_ui.bat` (API + Next + terminal).
+
 | URL | App |
 |-----|-----|
 | http://localhost:3000 | CongressInvests UI |
@@ -36,6 +38,12 @@ npm run dev -- -p 3000
 
 Se o SQLite já existir no teu disco de trabalho, a API usa-o.  
 Para popular de novo: `scripts/update_official.py` e `scripts/update_senate.py`.
+
+Preencher setores, fotos, opções e re-score (rápido, sem yfinance):
+
+```bash
+uv run python scripts/enrich_all.py
+```
 
 ## 4. Terminal — primeiro uso
 

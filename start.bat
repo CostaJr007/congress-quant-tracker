@@ -8,7 +8,7 @@ echo   CongressQuant CI://TERMINAL
 echo  ========================================
 echo.
 
-start "CI://TERMINAL Server" cmd /k "cd /d "%~dp0" && uv run python server\api_server.py"
+start "CI://TERMINAL Server" cmd /k "cd /d "%~dp0" && set PYTHONIOENCODING=utf-8 && set MARKET_DATA_ENABLED=1 && uv run python server\api_server.py"
 timeout /t 3 /nobreak >nul
 start http://localhost:8000/terminal/
 
