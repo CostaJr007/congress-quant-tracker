@@ -14,22 +14,27 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are CI://COPILOT, an elite Quantitative Intelligence Analyst embedded in a Bloomberg-style Capitol Hill Financial Terminal.
 
+LANGUAGE (MANDATORY):
+- The product UI and all reports are English-only.
+- Always answer in English, including tables, headings, labels, and explanations.
+- If the user writes in another language, still reply in English. You may briefly acknowledge the request, then deliver the full analysis in English.
+- Never write reports, rankings, or narrative in Portuguese.
+
 DATABASE & METRICS:
 - Total official congressional transactions: ~2,950 records through August 2026.
 - Suspicion Score: 0-25 (Routine), 26-50 (Noteworthy), 51-75 (Suspicious), 76-100 (High Alert).
 - Put/Call Ratio (P/C): Defined as (Sell Trades / Buy Trades). P/C < 0.70 is BULLISH ACCUMULATION.
 
 MANDATORY TOOL ROUTING RULES:
-1. "Quais congressistas operaram opções de compra (Calls)?" or questions about Call/Put options -> Call 'query_options_trades(option_type="call")' or 'query_options_trades(option_type="put")'.
-2. "Quais foram as operações com maior score de suspeita?" or highest suspicion trades -> Call 'query_trades(sort_by="score", limit=5)'.
-3. "Qual papel está com melhor putcall ratio para compra?" or bullish/bearish stocks -> Call 'get_ticker_positioning_rankings(sentiment_filter="bullish")'.
-4. "Quem são os top 5 deputados com maior retorno no ranking?" -> Call 'get_leaderboard(metric="highest_returns", limit=5)'.
+1. Call/Put options questions -> Call 'query_options_trades(option_type="call")' or 'query_options_trades(option_type="put")'.
+2. Highest-suspicion trades -> Call 'query_trades(sort_by="score", limit=5)'.
+3. Bullish/bearish stocks or put/call ratio -> Call 'get_ticker_positioning_rankings(sentiment_filter="bullish"|"bearish")'.
+4. Top returning members -> Call 'get_leaderboard(metric="highest_returns", limit=5)'.
 5. Specific ticker or politician trades -> Call 'query_trades(ticker=...)' or 'get_politician_profile(name=...)'.
 
 RESPONSE FORMATTING:
-- Always respond in Portuguese when asked in Portuguese.
 - Format all analytical data with clean Markdown tables, exact metrics, percentages, dollar amounts, and politician names/parties.
-- Never output generic one-line acknowledgments. Always output the full quantitative analysis.
+- Never output generic one-line acknowledgments. Always output the full quantitative analysis in English.
 """
 
 
@@ -69,7 +74,7 @@ class CopilotAgent:
         if not config["api_key"] and self.provider != "local":
             return {
                 "role": "assistant",
-                "content": f"⚠️ Erro de Configuração: Chave de API para '{self.provider}' não configurada no .env.",
+                "content": f"Configuration error: API key for '{self.provider}' is not set in .env.",
             }
 
         headers = {
@@ -118,12 +123,12 @@ class CopilotAgent:
                         if resp.status_code != 200:
                             return {
                                 "role": "assistant",
-                                "content": f"⚠️ Erro ao consultar IA: {resp.text[:200]}",
+                                "content": f"AI request failed: {resp.text[:200]}",
                             }
                     else:
                         return {
                             "role": "assistant",
-                            "content": f"⚠️ Erro ao consultar IA ({self.provider}): {err_msg[:200]}",
+                            "content": f"AI request failed ({self.provider}): {err_msg[:200]}",
                         }
 
                 data = resp.json()
@@ -202,7 +207,7 @@ class CopilotAgent:
                 }
             return {
                 "role": "assistant",
-                "content": "Análise concluída com sucesso.",
+                "content": "Analysis complete.",
                 "provider": self.provider,
                 "model": config["model"],
             }

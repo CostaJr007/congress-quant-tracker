@@ -42,7 +42,7 @@ window.GMT = window.GMT || {};
         id: "btn-ai-copilot",
         class: "seg btn-ai",
         style: "background:rgba(242,140,0,0.15);border:1px solid var(--org);color:var(--org);font-weight:800;cursor:pointer;padding:3px 10px;margin-left:auto;display:flex;align-items:center;gap:6px;",
-        title: "Abrir Assistente Quantitativo de IA [F2]",
+        title: "Open quantitative AI assistant [F2]",
         onclick: () => this.toggle(),
       }, [
         el("span", { style: "font-size:11px;" }, "✦ AI://COPILOT"),
@@ -78,12 +78,12 @@ window.GMT = window.GMT || {};
           ]),
           el("button", {
             style: "color:var(--ink-dim);cursor:pointer;font-size:13px;padding:2px 6px;border:1px solid transparent;",
-            title: "Limpar conversa",
+            title: "Clear conversation",
             onclick: () => this.clearChat(),
           }, "↺"),
           el("button", {
             style: "color:var(--ink);cursor:pointer;font-size:14px;padding:2px 6px;",
-            title: "Fechar [Esc]",
+            title: "Close [Esc]",
             onclick: () => this.toggle(false),
           }, "✕"),
         ]),
@@ -97,35 +97,35 @@ window.GMT = window.GMT || {};
 
       const categories = [
         {
-          label: "🏛️ CONGRESS",
+          label: "CONGRESS",
           pills: [
-            ["Nancy Pelosi", "Mostre os trades oficiais da Nancy Pelosi com data, ativo, tipo de ordem e retornos."],
-            ["John McGuire", "Faça o dossiê completo de compras e histórico de John McGuire."],
-            ["Josh Gottheimer", "Quais as principais compras e vendas de Josh Gottheimer?"],
+            ["Nancy Pelosi", "Show Nancy Pelosi's official trades with date, ticker, side, and returns."],
+            ["John McGuire", "Full buy history and dossier for John McGuire."],
+            ["Josh Gottheimer", "What are Josh Gottheimer's main buys and sells?"],
           ]
         },
         {
-          label: "🏆 RANKINGS",
+          label: "RANKINGS",
           pills: [
-            ["Top 5 Retornos", "Quem são os top 5 deputados com maior retorno médio no ranking geral?"],
-            ["Top PnL ($)", "Quais congressistas acumulam o maior lucro estimado em dólares?"],
-            ["Compras Agosto/26", "Quem são os maiores compradores em Agosto de 2026? Gere uma tabela."],
+            ["Top 5 Returns", "Who are the top 5 members by average return on the leaderboard?"],
+            ["Top PnL ($)", "Which members have the highest estimated dollar profit?"],
+            ["August 2026 Buys", "Who were the largest buyers in August 2026? Return a table."],
           ]
         },
         {
-          label: "🎯 ATIVOS & OPÇÕES",
+          label: "ASSETS & OPTIONS",
           pills: [
-            ["NVDA Sentimento", "Como os congressistas estão posicionados em NVDA? Calcule a taxa de compras vs vendas."],
-            ["Opções (Calls/Puts)", "Quais congressistas negociaram opções de ações e em quais empresas?"],
-            ["Setores em Alta", "Qual o setor mais acumulado pelos congressistas e qual o sentimento atual?"],
+            ["NVDA Sentiment", "How is Congress positioned in NVDA? Compute buy vs sell rate."],
+            ["Options (Calls/Puts)", "Which members traded stock options, and in which names?"],
+            ["Hot Sectors", "Which sector is most accumulated by Congress, and what is current sentiment?"],
           ]
         },
         {
-          label: "🚨 SUSPEITA",
+          label: "ALERTS",
           pills: [
-            ["Trades Suspeitos", "Quais as 5 operações com maior score de suspeita no banco? Explique os motivos."],
-            ["(R) vs (D)", "Compare o volume financeiro e o perfil de compras entre Republicanos e Democratas."],
-            ["Últimas Notícias", "Resuma as principais notícias e eventos macroeconômicos do dia."],
+            ["Suspicious Trades", "What are the 5 highest-suspicion trades? Explain the reasons."],
+            ["(R) vs (D)", "Compare trade volume and buy profile between Republicans and Democrats."],
+            ["Latest News", "Summarize the main market and macro headlines for today."],
           ]
         }
       ];
@@ -184,7 +184,7 @@ window.GMT = window.GMT || {};
         el("div", { style: "display:flex;gap:6px;" }, [
           el("textarea", {
             id: "ai-input-text",
-            placeholder: "Pergunte sobre deputados, ações, retornos, opções ou relatórios...",
+            placeholder: "Ask about members, tickers, returns, options, or reports...",
             rows: "2",
             style: "flex:1;background:#0E0E0E;border:1px solid #3A3A3A;color:var(--ink);padding:6px 8px;font-size:11px;resize:none;outline:none;font-family:var(--mono);",
             onkeydown: (e) => {
@@ -201,7 +201,7 @@ window.GMT = window.GMT || {};
           }, "RUN ▶"),
         ]),
         el("div", { style: "display:flex;justify-content:space-between;font-size:9px;color:var(--ink-faint);" }, [
-          el("span", {}, "Shift+Enter pula linha · Enter envia"),
+          el("span", {}, "Shift+Enter newline · Enter send"),
           el("span", {}, "CI://AGENT LIVE ENGINE"),
         ]),
       ]);
@@ -214,15 +214,15 @@ window.GMT = window.GMT || {};
 
       // Add Welcome Message with Interactive 1-Click Prompt Cards
       this.addMessage("assistant",
-        "Olá! Sou o **CI://COPILOT**, seu analista quantitativo de inteligência parlamentar.\n\n" +
-        "Tenho conexão direta com o banco SQLite oficial (**2.947 trades**, 95 parlamentares, retornos de mercado, opções e índices de suspeita).\n\n" +
-        "💡 **Clique em qualquer pergunta abaixo para executar diretamente:**\n" +
-        "- *\"Quais os últimos trades da Nancy Pelosi e o retorno de cada um?\"*\n" +
-        "- *\"Quem são os top 5 deputados com maior retorno no ranking?\"*\n" +
-        "- *\"Como os congressistas estão posicionados em NVDA?\"*\n" +
-        "- *\"Quais congressistas operaram opções de compra (Calls) no ano?\"*\n" +
-        "- *\"Quais foram as 5 operações com maior score de suspeita?\"*\n\n" +
-        "Ou use as abas no topo para mais tópicos!"
+        "I am **CI://COPILOT**, the quantitative analyst for this Capitol Hill desk.\n\n" +
+        "I am connected to the official SQLite book (**2,947 trades**, 95 members, market returns, options, and suspicion scores).\n\n" +
+        "Click any prompt below to run it:\n" +
+        "- *\"What are Nancy Pelosi's latest trades and the return on each?\"*\n" +
+        "- *\"Who are the top 5 members by average return?\"*\n" +
+        "- *\"How is Congress positioned in NVDA?\"*\n" +
+        "- *\"Which members traded call options this year?\"*\n" +
+        "- *\"What are the 5 highest-suspicion trades?\"*\n\n" +
+        "Or use the tabs above for more topics."
       );
     },
 
@@ -258,7 +258,7 @@ window.GMT = window.GMT || {};
       this.history = [];
       const cont = document.getElementById("ai-messages");
       if (cont) cont.innerHTML = "";
-      this.addMessage("assistant", "Conversa reiniciada. Em que posso colaborar?");
+      this.addMessage("assistant", "Conversation cleared. What should I analyze?");
     },
 
     async loadModels() {
@@ -395,7 +395,7 @@ window.GMT = window.GMT || {};
       this.history.push({ role: "user", content: text });
 
       // Thinking indicator
-      const thinking = this.addMessage("assistant", "⚡ *Consultando dados oficiais e calculando métricas...*");
+      const thinking = this.addMessage("assistant", "Querying official filings and computing metrics...");
 
       try {
         const resp = await fetch("/api/terminal/chat", {
@@ -413,7 +413,7 @@ window.GMT = window.GMT || {};
         }
 
         const data = await resp.json();
-        const content = data.content || "Nenhuma resposta gerada.";
+        const content = data.content || "No response generated.";
         this.history.push({ role: "assistant", content });
 
         if (thinking) {
@@ -423,7 +423,7 @@ window.GMT = window.GMT || {};
       } catch (err) {
         if (thinking) {
           const msgBody = thinking.querySelector(".msg-body");
-          if (msgBody) msgBody.innerHTML = `<span style='color:var(--dn)'>⚠️ Erro ao consultar IA: ${err.message}</span>`;
+          if (msgBody) msgBody.innerHTML = `<span style='color:var(--dn)'>AI request failed: ${err.message}</span>`;
         }
       } finally {
         this.isBusy = false;

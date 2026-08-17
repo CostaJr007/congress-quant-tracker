@@ -75,7 +75,7 @@ TOOLS_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "query_options_trades",
-            "description": "Query congressional stock options (Calls and Puts) trades. Use this whenever the user asks 'quais congressistas operaram opções de compra (Calls)?', 'quem comprou calls ou puts?', or questions about options contracts.",
+            "description": "Query congressional stock options (Calls and Puts). Use for questions about who bought calls or puts, option contracts, or options activity.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -126,7 +126,7 @@ TOOLS_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_ticker_positioning_rankings",
-            "description": "Rank and find stocks/tickers with the best Put/Call Ratio (P/C ratio), highest Buy % (Bullish Accumulation), highest Sell % (Bearish Distribution), or most accumulated by congressmen. Use this whenever the user asks 'qual papel esta com melhor putcall ratio para compra?', 'quais ações os congressistas mais compraram?', 'quais papéis têm sentimento bullish/bearish?'.",
+            "description": "Rank tickers by Put/Call ratio, highest Buy % (bullish accumulation), highest Sell % (bearish distribution), or most accumulated by members of Congress. Use for positioning, sentiment, or 'which stocks are they buying' questions.",
             "parameters": {
                 "type": "object",
                 "properties": {
