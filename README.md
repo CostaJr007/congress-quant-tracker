@@ -1,26 +1,28 @@
 # CongressQuantTracker
 
-**Congressional trading intelligence + Bloomberg-style market desk**
+**Congressional trading intelligence + CI://TERMINAL market desk**
 
-Rastreador de disclosures financeiros (PTR) da **House** e do **Senate** dos EUA, com scores, fotos, performance estimada via **yfinance**, UI Next.js e um terminal **CI://TERMINAL** (visual Bloomberg × ASCII) para acompanhar deputados/senadores, ativos em comum, setores e ranking de retornos.
+Track House and Senate periodic transaction reports (PTRs), score them, estimate post-trade performance with **yfinance**, and explore the book in a Next.js app plus **CI://TERMINAL** — a dense Bloomberg-style ASCII desk (no Bloomberg marks or logos).
 
-> Repositório **privado**. Não commitar `.env`, chaves de API, nem o banco SQLite.
+Product name: **CongressInvests** / **CI**.  
+Private repository. Do not commit `.env`, API keys, or the SQLite database.
 
 ---
 
-## O que o sistema faz
+## What it does
 
-| Área | Capacidade |
+| Area | Capability |
 |------|------------|
-| **Disclosures** | House FD (zip/PDF) + Senate eFD / fallbacks |
-| **Scoring** | Score 0–100 e tags (routine → high_alert) |
-| **Mercado** | Preço desde o trade, shares est., sparklines (yfinance + cache) |
-| **UI web** | Dashboard, politicians, trades por mês, stocks, signals, leaderboard |
-| **CI://TERMINAL** | Desk denso: wire por mês, fotos, holders, setores, velas diárias, **returns leaderboard** |
+| **Disclosures** | House Clerk FD (zip/PDF) + Senate eFD with fallbacks |
+| **Scoring** | 0–100 suspicion score and tags (`routine` → `high_alert`) |
+| **Market** | Price since trade date, estimated shares/PnL, charts (yfinance + cache) |
+| **Web UI** | Dashboard, politicians, monthly trades, stocks, signals, leaderboard, analyze |
+| **CI://TERMINAL** | Monthly wire, member photos, co-holders, sectors, candles, returns board, **CI://COPILOT** (English) |
+| **Copilot** | Tool-calling analyst (Groq / OpenAI / local). Always answers in English. |
 
 ---
 
-## Arquitetura
+## Architecture
 
 ```
 ┌─────────────────────┐     ┌──────────────────────────┐
@@ -34,25 +36,25 @@ Rastreador de disclosures financeiros (PTR) da **House** e do **Senate** dos EUA
 └─────────────────────┘
 ```
 
-| Componente | Path | Porta |
-|------------|------|-------|
+| Component | Path | Port |
+|-----------|------|------|
 | API | `server/api_server.py` | **8000** |
-| UI fused | `web_fused/` | **3000** |
-| Terminal | `ci_terminal/` → servido em `/terminal/` | via 8000 |
+| Web UI | `web_fused/` | **3000** |
+| Terminal | `ci_terminal/` served at `/terminal/` | via 8000 |
 | Domain | `src/congress_quant_tracker/` | — |
-| Fotos | `web_fused/public/politicians/` | `/politicians/{bioguide}.jpg` |
+| Photos | `data/politicians/{bioguide}.jpg` | `/politicians/{bioguide}.jpg` |
 
 ---
 
-## Início rápido
+## Quick start
 
-### Pré-requisitos
+### Prerequisites
 
-- Python **3.12+** e [uv](https://github.com/astral-sh/uv)
-- Node.js **20+** (para `web_fused`)
+- Python **3.12+** and [uv](https://github.com/astral-sh/uv)
+- Node.js **20+** (for `web_fused`)
 - Windows / macOS / Linux
 
-### 1. Clone e dependências
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/CostaJr007/congress-quant-tracker.git
@@ -61,116 +63,114 @@ uv sync
 cd web_fused && npm install && cd ..
 ```
 
-### 2. Ambiente
+### 2. Environment
 
 ```bash
-# crie .env a partir do exemplo (não versionado)
 copy .env.example .env   # Windows
 # cp .env.example .env   # Unix
 ```
 
-Variáveis úteis:
-
-| Variável | Default | Função |
-|----------|---------|--------|
+| Variable | Default | Role |
+|----------|---------|------|
 | `MARKET_DATA_ENABLED` | `1` | yfinance (charts, returns, enrich) |
-| `NO_YF` | `0` | desliga yfinance no scorer (mercado pode continuar com MARKET_DATA) |
-| `GROQ_API_KEY` | — | extração LLM de PDFs + Copilot (opcional) |
-| `OPENAI_API_KEY` | — | Copilot GPT (opcional) |
-| `TAVILY_API_KEY` | — | busca / resolve (opcional) |
-| `DISCORD_WEBHOOK_URL` | — | alerta de trades novos / flagged |
-| `HTTP_PROXY` | — | proxy HTTPS p/ Senate eFD se bloqueado |
-| `DATABASE_URL` | SQLite local | URL do banco |
+| `NO_YF` | `0` | skip yfinance in the scorer only |
+| `GROQ_API_KEY` | — | optional PDF extraction + Copilot |
+| `OPENAI_API_KEY` | — | optional Copilot provider |
+| `TAVILY_API_KEY` | — | optional search / ticker resolve |
+| `DISCORD_WEBHOOK_URL` | — | optional alerts on new / flagged trades |
+| `HTTP_PROXY` | — | HTTPS proxy if Senate eFD is blocked |
+| `DATABASE_URL` | local SQLite | database URL |
 
-### 3. Subir API + UI
+### 3. Run API + UI
+
+Windows shortcut: `run_ui.bat` (API + Next.js + terminal).  
+Terminal only: `start.bat`.
 
 ```bash
 # API (market data ON)
 set MARKET_DATA_ENABLED=1
-uv run python server\api_server.py
+uv run python server/api_server.py
 
-# outro terminal — Next.js
+# another shell — Next.js
 cd web_fused
 echo NEXT_PUBLIC_API_URL=http://localhost:8000 > .env.local
 npm run dev -- -p 3000
 ```
 
-- **Dashboard:** http://localhost:3000  
-- **CI://TERMINAL:** http://localhost:8000/terminal/  
-- **API docs:** http://localhost:8000/docs  
+| URL | App |
+|-----|-----|
+| http://localhost:3000 | CongressInvests UI |
+| http://localhost:8000/terminal/ | CI://TERMINAL |
+| http://localhost:8000/docs | OpenAPI |
 
-### 4. Pipelines (dados)
+### 4. Data pipelines
 
 ```bash
-# House official
-uv run python scripts/update_official.py
-
-# Senate (pode precisar proxy; se o proxy cair, tenta direto)
-uv run python scripts/update_senate.py
-
-# Setores + fotos + opções + re-score (sem yfinance)
-uv run python scripts/enrich_all.py
-
-# Re-score apenas
-uv run python scripts/rescore.py
+uv run python scripts/update_official.py   # House Clerk
+uv run python scripts/update_senate.py     # Senate (direct, then proxy)
+uv run python scripts/enrich_all.py        # sectors + photos + options + rescore
+uv run python scripts/rescore.py           # rescore only
 ```
 
-Endpoints de pipeline também existem em `POST /api/pipeline/*`.
+HTTP equivalents live under `POST /api/pipeline/*`.
 
 ---
 
 ## CI://TERMINAL
 
-Desk monoespaçado preto + barras laranja (estilo Bloomberg **sem** marcas protegidas).
+Monospace black canvas, orange bars. Brand is **CI://TERMINAL**.
 
-### Widgets principais (preset CONGRESS)
+### Main widgets (CONGRESS preset)
 
-| Widget | Função |
-|--------|--------|
-| **MEMBERS · BY MONTH** | Browser por mês (filed/traded), cards com foto, blocos colapsados se muitos trades |
-| **RETURNS LEADERBOARD** | Ranking por Δ% / ADJ% (BUY:+Δ, SELL:−Δ) e PnL$ est. |
-| **FOCUSED ASSET** | Velas diárias (ou linha) + marcador TX na data do trade |
-| **ASSET HOLDERS** | Quem mais operou o mesmo ticker (House/Senate) |
-| **POLITICIAN BOOK** | Tickers + datas TX/FILED do membro |
-| **SECTOR DESK** | Overlap House×Senate por setor |
+| Widget | Role |
+|--------|------|
+| **MEMBERS · BY MONTH** | Browse by filed/traded month; photo cards; collapse heavy filers |
+| **RETURNS LEADERBOARD** | Rank by Δ% / ADJ% (BUY:+Δ, SELL:−Δ) and estimated PnL$ |
+| **FOCUSED ASSET** | Daily candles (or line) + TX marker on the trade date |
+| **ASSET HOLDERS** | Who else traded the same ticker |
+| **POLITICIAN BOOK** | Member tickers + TX/FILED dates |
+| **SECTOR DESK** | House × Senate overlap by sector |
+| **CI://COPILOT** | F2 — English-only desk analyst |
 
 Presets: `CGS` (default) · `GLB` · `EQ` · `MET` · `NWS`  
-Layout editável (EDIT / drag) salvo em `localStorage` (`layout.v3`).
+Editable layout (EDIT / drag) stored in `localStorage` (`layout.v3`).
 
-### API do terminal
+First load: if an old layout hides **RETURNS**, click **RESET**.
 
-| Endpoint | Descrição |
-|----------|-----------|
-| `GET /api/terminal/dataset?dataset=tape\|stocks\|…` | Mercado yfinance |
-| `GET /api/terminal/congress/wire` | Disclosures (+ filtros mês, chamber, party, side, q) |
-| `GET /api/terminal/congress/months` | Meses com trades |
+### Terminal API
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/terminal/dataset?dataset=tape\|stocks\|…` | yfinance market payloads |
+| `GET /api/terminal/congress/wire` | Disclosures (month, chamber, party, side, q) |
+| `GET /api/terminal/congress/months` | Months with trades |
 | `GET /api/terminal/congress/holders/{ticker}` | Co-holders |
-| `GET /api/terminal/congress/sector` | Setor desk |
-| `GET /api/terminal/congress/politician?name=` | Book do membro |
-| `GET /api/terminal/congress/returns` | Leaderboard de retornos |
-| `GET /api/terminal/market/{ticker}?from_date=` | OHLCV diário p/ chart |
-| `GET /api/analyze/overview` | Party / setor / opções / suspicious |
-| `POST /api/pipeline/enrich` | Setores + fotos + rescore |
+| `GET /api/terminal/congress/sector` | Sector desk |
+| `GET /api/terminal/congress/politician?name=` | Member book |
+| `GET /api/terminal/congress/returns` | Returns leaderboard |
+| `GET /api/terminal/market/{ticker}?from_date=` | Daily OHLCV |
+| `POST /api/terminal/chat` | Copilot (English) |
+| `GET /api/analyze/overview` | Party / sector / options / suspicious |
+| `POST /api/pipeline/enrich` | Sectors + photos + rescore |
 
-Config LIVE do front: `ci_terminal/js/live.config.js` (same-origin).
+LIVE config: `ci_terminal/js/live.config.js` (same-origin).
 
-### Definições de dados (importante)
+### Data definitions
 
-- Disclosures usam **faixas de valor**, não shares exatos → shares/PnL são **estimativas** (midpoint).
-- `change_pct` = movimento do ativo desde a data do trade (yfinance, `auto_adjust`).
-- `return_side_adj` = BUY:+Δ% / SELL:−Δ% (outcome do lado da operação).
-- Metais no tape usam futuros Yahoo (`GC=F` etc.) como proxy de spot.
-- News wire DEMO não é feed licenciado; não fabricar notícias “live”.
+- Disclosures use **value ranges**, not exact shares → shares/PnL are **midpoint estimates**.
+- `change_pct` = asset move since trade date (yfinance, `auto_adjust`).
+- `return_side_adj` = BUY:+Δ% / SELL:−Δ% (side-adjusted outcome).
+- Metals on the tape use Yahoo futures (`GC=F`, …) as spot proxies.
+- News wire is DEMO unless a live RSS feed succeeds. Do not invent live headlines.
 
-Detalhes: `ci_terminal/DATA_DEFINITIONS.md` e `ci_terminal/README.md`.
+See `ci_terminal/DATA_DEFINITIONS.md` and `ci_terminal/README.md`.
 
 ---
 
-## UI web_fused
+## Web UI (`web_fused`)
 
-- **Trades** — filtro por mês, grouping de filers pesados (`TradeGroupList`)
-- **Politicians / Stocks / Signals / Leaderboard**
-- Link **CI Terminal** na sidebar → abre o desk
+- Dashboard, Trades (month filter + grouping), Politicians, Stocks, Signals, Leaderboard, Analyze
+- Sidebar search + **CI Terminal** link
 
 ```
 NEXT_PUBLIC_API_URL=http://localhost:8000
@@ -178,33 +178,33 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ---
 
-## Estrutura de pastas (resumo)
+## Repository layout
 
 ```
 congress-quant-tracker/
-├── server/api_server.py          # FastAPI (trades, market, terminal, pipelines)
-├── src/congress_quant_tracker/
-│   ├── enrichers/
-│   │   ├── market_data.py        # yfinance cache / trade performance
-│   │   ├── terminal_market.py    # feed LIVE do heatmap/tape
-│   │   └── terminal_congress.py  # wire, holders, returns, setores
-│   ├── fetchers/ parsers/ scoring/ services/ …
-├── ci_terminal/            # CI://TERMINAL (HTML/CSS/JS offline-capable)
-├── web_fused/                    # Next.js UI principal
-├── scripts/                      # update_official, update_senate, rescore
-├── dashboard/                    # Streamlit legado (opcional)
+├── server/api_server.py          # FastAPI
+├── src/congress_quant_tracker/   # fetchers, parsers, scoring, analyzers
+│   ├── enrichers/                # market, terminal, sectors
+│   └── agent/                    # CI://COPILOT
+├── ci_terminal/                  # CI://TERMINAL static desk
+├── web_fused/                    # Next.js UI
+├── scripts/                      # update, enrich, rescore
+├── dashboard/                    # optional Streamlit
+├── tests/
 ├── pyproject.toml
 └── README.md
 ```
 
 ---
 
-## Segurança e privacidade
+## Security
 
-- **Não** commitar: `.env`, `*.db`, `data/`, chaves API, proxies com credenciais.
-- `.gitignore` já cobre secrets, cache de preços, `node_modules`, PDFs.
-- Fotos de políticos: `web_fused/public/politicians/` (bioguide); API monta em `/politicians/`.
-- Repo deve permanecer **private** se contiver dados operacionais ou configs internas.
+Do **not** commit: `.env`, `*.db`, `data/`, API keys, proxies with credentials.  
+`.gitignore` already covers secrets, price cache, `node_modules`, and PDFs.
+
+Photos are served from `data/politicians/` at `/politicians/{bioguide}.jpg`.
+
+Keep the repo **private** if it holds operational data.
 
 ```bash
 gh repo edit CostaJr007/congress-quant-tracker --visibility private
@@ -212,46 +212,32 @@ gh repo edit CostaJr007/congress-quant-tracker --visibility private
 
 ---
 
-## Scripts úteis
+## Useful commands
 
-| Comando | Ação |
-|---------|------|
-| `uv run python server/api_server.py` | API :8000 |
+| Command | Action |
+|---------|--------|
+| `uv run python server/api_server.py` | API :8000 + `/terminal/` |
+| `start.bat` | API + open terminal |
+| `run_ui.bat` | API + web UI + terminal |
 | `cd web_fused && npm run dev` | UI :3000 |
 | `uv run python scripts/update_official.py` | House |
 | `uv run python scripts/update_senate.py` | Senate |
-| `uv run python scripts/rescore.py` | Re-score trades |
-| `uv run python scripts/enrich_all.py` | Setores + fotos + opções + rescore |
-| `uv run pytest` | Testes unitários |
+| `uv run python scripts/enrich_all.py` | Sectors + photos + options + rescore |
+| `uv run pytest` | Unit tests |
 
 ---
 
-## Limitações conhecidas
+## Known limits
 
-- Yahoo/yfinance: atraso e rate limit; 1ª carga do returns leaderboard pode demorar.
-- Senate eFD: Akamai/403 — use proxy HTTPS se necessário.
-- Setores no SQLite muitas vezes vazios → mapa estático ticker→setor no terminal.
-- Holiday calendar de bolsas: sessão do clock pode marcar OPEN sem feriados oficiais.
-- Estimativas de shares/PnL **não** são posições oficiais.
-
----
-
-## Licença / uso
-
-Uso interno / pesquisa. Fontes oficiais de disclosure (House/Senate) e cotações Yahoo (não oficiais).  
-Não é aconselhamento de investimento. Não copiar marcas/logos Bloomberg.
+- Yahoo/yfinance: delay and rate limits; first returns-leaderboard load can be slow.
+- Senate eFD: Akamai/403 — try a working HTTPS proxy; the pipeline falls back to CongressInvests and retries direct if the proxy is dead.
+- Some obscure tickers still have no sector; the desk uses a static ticker→sector map plus yfinance when enabled.
+- Exchange holiday calendar is not applied; the session clock may show OPEN on holidays.
+- Share and PnL figures are **not** official positions.
 
 ---
 
-## Changelog (merge terminal)
+## License / use
 
-- **web_fused** Next.js (dashboard, trades, politicians, stocks, signals, leaderboard, analyze)  
-- Analyzers ligados em `/api/analyze/*` + Discord opcional após pipelines  
-- Setores estáticos + rescore + fotos; Senate eFD tenta direto se o proxy cair  
-- Integração **CI://TERMINAL** Bloomberg × ASCII + adapters LIVE/DEMO  
-- yfinance bulk (tape, heatmap, metals, chart diário)  
-- Wire por mês + cards de membros com **fotos**  
-- Holders / sector desk / politician book + datas TX/FILED  
-- Candlestick diário + marcador de trade  
-- **Returns leaderboard** (trade / member, ADJ%, PnL est.)  
-- Link na sidebar do `web_fused`  
+Internal research. Official House/Senate disclosures and unofficial Yahoo quotes.  
+Not investment advice. Do not copy Bloomberg trademarks or logos.

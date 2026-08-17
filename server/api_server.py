@@ -1670,7 +1670,7 @@ def api_chat_models():
             },
             {
                 "id": "local",
-                "name": "Local Llama Server (Kolmogorov)",
+                "name": "Local Llama Server",
                 "badge": "100% OFFLINE / PRIVATE",
                 "available": True,
                 "is_default": False,

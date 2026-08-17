@@ -74,7 +74,7 @@ window.GMT = window.GMT || {};
           }, [
             el("option", { value: "groq" }, "Groq (Llama 70B — Fast)"),
             el("option", { value: "openai" }, "OpenAI (GPT-4o Mini)"),
-            el("option", { value: "local" }, "Local Llama (Kolmogorov)"),
+            el("option", { value: "local" }, "Local Llama"),
           ]),
           el("button", {
             style: "color:var(--ink-dim);cursor:pointer;font-size:13px;padding:2px 6px;border:1px solid transparent;",

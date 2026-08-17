@@ -32,7 +32,7 @@ def send_trade_alert(trade: Dict, pdf_url: str = "") -> bool:
             {"name": "Filed", "value": str(trade.get("filing_date", "N/A")), "inline": True},
             {"name": "Score", "value": f"{score}/100 — {tag.replace('_',' ').title()}", "inline": True},
         ],
-        "footer": {"text": "Disclose — Congressional Trading Intelligence"},
+        "footer": {"text": "CongressInvests — Congressional Trading Intelligence"},
     }
     if pdf_url: embed["url"] = pdf_url
     try:
@@ -58,7 +58,7 @@ def send_daily_summary(trades: List[Dict], filings_count: int, new_trades: int) 
             {"name": "🟠 Suspicious", "value": str(len(suspicious)), "inline": True},
             {"name": "🔵 Noteworthy", "value": str(len(noteworthy)), "inline": True},
         ],
-        "footer": {"text": "Disclose — Congressional Trading Intelligence"},
+        "footer": {"text": "CongressInvests — Congressional Trading Intelligence"},
     }
     try:
         resp = requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]}, timeout=10)

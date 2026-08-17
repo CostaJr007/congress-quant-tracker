@@ -27,7 +27,7 @@ class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-    # Local Llama / Kolmogorov Llama Server
+    # Local OpenAI-compatible Llama server
     LOCAL_LLM_URL: str = os.getenv("LOCAL_LLM_URL", "http://127.0.0.1:8080/v1")
 
     # Tavily (search / ticker resolve / news filters)
