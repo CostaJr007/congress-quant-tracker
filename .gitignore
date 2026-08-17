@@ -21,7 +21,7 @@ build/
 *.sqlite3
 *.sqlite
 
-# Runtime data & caches (repo-root only — not kimi_gmt_terminal/js/data)
+# Runtime data & caches (repo-root only — not ci_terminal/js/data)
 /data/
 /pdfs/
 **/cache/
@@ -64,7 +64,7 @@ run_*clone*.bat
 /_*.html
 /_*.pdf
 
-# Deliverable zips / external dumps (source lives in kimi_gmt_terminal/)
+# Deliverable zips / external dumps (source lives in ci_terminal/)
 *.zip
 /global-market-terminal-final/
 **/market-dashboard/

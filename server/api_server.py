@@ -1369,7 +1369,7 @@ def api_enrich():
 
 # ─── CI://TERMINAL LIVE feed (yfinance + congress) + static canvas ─────
 
-_GMT_DIR = Path(__file__).resolve().parent.parent / "kimi_gmt_terminal"
+_GMT_DIR = Path(__file__).resolve().parent.parent / "ci_terminal"
 
 
 @app.get("/api/terminal/health")
@@ -1696,7 +1696,7 @@ def terminal_index():
     """Serve Bloomberg × ASCII global market terminal."""
     index = _GMT_DIR / "index.html"
     if not index.exists():
-        raise HTTPException(status_code=404, detail="GMT terminal not installed (kimi_gmt_terminal/ missing)")
+        raise HTTPException(status_code=404, detail="CI://TERMINAL not installed (ci_terminal/ missing)")
     return FileResponse(index, media_type="text/html")
 
 

@@ -1,6 +1,6 @@
 """GMT terminal market feed — yfinance bulk quotes shaped for LIVE adapter schema.
 
-Produces datasets matching kimi_gmt_terminal fixtures:
+Produces datasets matching CI://TERMINAL fixtures:
   tape | stocks | aapl60 | metals | sectors | news | quotes | meta
 
 Never fabricates news. News stays DEMO-labeled fixtures unless Tavily is configured.
@@ -39,7 +39,7 @@ TAPE_MAP: list[dict[str, str]] = [
 ]
 
 STOCK_UNIVERSE: list[dict[str, str]] = [
-    # AI / TECH (expanded from Kimi market-dashboard + megacaps)
+    # AI / TECH (megacaps + semis)
     {"t": "NVDA", "name": "NVIDIA Corp", "sector": "AI-TECH", "sub": "SEMIS"},
     {"t": "MSFT", "name": "Microsoft Corp", "sector": "AI-TECH", "sub": "MEGACAP"},
     {"t": "AAPL", "name": "Apple Inc", "sector": "AI-TECH", "sub": "MEGACAP"},

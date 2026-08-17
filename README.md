@@ -30,7 +30,7 @@ Rastreador de disclosures financeiros (PTR) da **House** e do **Senate** dos EUA
                             │  /terminal/  (static)    │
 ┌─────────────────────┐     │  /politicians/*.jpg      │
 │  CI://TERMINAL      │────▶│  /api/terminal/*         │
-│  kimi_gmt_terminal/ │     └──────────────────────────┘
+│  ci_terminal/       │     └──────────────────────────┘
 └─────────────────────┘
 ```
 
@@ -38,7 +38,7 @@ Rastreador de disclosures financeiros (PTR) da **House** e do **Senate** dos EUA
 |------------|------|-------|
 | API | `server/api_server.py` | **8000** |
 | UI fused | `web_fused/` | **3000** |
-| Terminal | `kimi_gmt_terminal/` → servido em `/terminal/` | via 8000 |
+| Terminal | `ci_terminal/` → servido em `/terminal/` | via 8000 |
 | Domain | `src/congress_quant_tracker/` | — |
 | Fotos | `web_fused/public/politicians/` | `/politicians/{bioguide}.jpg` |
 
@@ -152,7 +152,7 @@ Layout editável (EDIT / drag) salvo em `localStorage` (`layout.v3`).
 | `GET /api/analyze/overview` | Party / setor / opções / suspicious |
 | `POST /api/pipeline/enrich` | Setores + fotos + rescore |
 
-Config LIVE do front: `kimi_gmt_terminal/js/live.config.js` (same-origin).
+Config LIVE do front: `ci_terminal/js/live.config.js` (same-origin).
 
 ### Definições de dados (importante)
 
@@ -162,7 +162,7 @@ Config LIVE do front: `kimi_gmt_terminal/js/live.config.js` (same-origin).
 - Metais no tape usam futuros Yahoo (`GC=F` etc.) como proxy de spot.
 - News wire DEMO não é feed licenciado; não fabricar notícias “live”.
 
-Detalhes: `kimi_gmt_terminal/DATA_DEFINITIONS.md` e `kimi_gmt_terminal/README.md`.
+Detalhes: `ci_terminal/DATA_DEFINITIONS.md` e `ci_terminal/README.md`.
 
 ---
 
@@ -189,7 +189,7 @@ congress-quant-tracker/
 │   │   ├── terminal_market.py    # feed LIVE do heatmap/tape
 │   │   └── terminal_congress.py  # wire, holders, returns, setores
 │   ├── fetchers/ parsers/ scoring/ services/ …
-├── kimi_gmt_terminal/            # CI://TERMINAL (HTML/CSS/JS offline-capable)
+├── ci_terminal/            # CI://TERMINAL (HTML/CSS/JS offline-capable)
 ├── web_fused/                    # Next.js UI principal
 ├── scripts/                      # update_official, update_senate, rescore
 ├── dashboard/                    # Streamlit legado (opcional)

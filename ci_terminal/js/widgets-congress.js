@@ -903,7 +903,7 @@ window.GMT = window.GMT || {};
     }
   };
 
-  /* ---------- O. FOCUSED ASSET CHART (candles default — Kimi port) ---------- */
+  /* ---------- O. FOCUSED ASSET CHART (candles default) ---------- */
   W.focuschart = {
     num: "15", title: "FOCUSED ASSET · DAILY CANDLES", min: [5, 6],
     render(body) {
@@ -911,7 +911,7 @@ window.GMT = window.GMT || {};
       const tk = p.focusTicker || "—";
       const chart = G.datasets.focusChart;
       const prov = G.prov.focusChart;
-      // default candle mode (from Kimi market-dashboard)
+      // default candle mode
       if (!p.chartStyle) p.chartStyle = "candle";
 
       const bar = el("div", { class: "toolbar" });

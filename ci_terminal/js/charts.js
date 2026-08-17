@@ -147,7 +147,7 @@ window.GMT = window.GMT || {};
     return svg;
   }
 
-  /* ---------- candlestick + volume (from Kimi market-dashboard, SVG port)
+  /* ---------- candlestick + volume (SVG)
      series: [{d, o,h,l,c,v}] daily sessions. Supports markDate + crosshair. */
   function candlestickVolume(container, opts) {
     container.innerHTML = "";

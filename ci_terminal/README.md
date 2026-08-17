@@ -16,7 +16,7 @@ Offline DEMO works by double-clicking `index.html`. LIVE needs FastAPI + DB.
 
 ### Offline DEMO (no network, no server)
 
-1. Unzip or open the folder `kimi_gmt_terminal/`
+1. Unzip or open the folder `ci_terminal/`
 2. Double-click **`index.html`** (or open via `file://`)
 3. All widgets load from deterministic bundled fixtures (`js/data/fixtures.js`)
 4. Top bar shows **DEMO DATA** · LIVE adapter is disabled on `file://`
@@ -108,7 +108,7 @@ Datasets: `tape`, `stocks`, `aapl60`, `metals`, `sectors`, `news`, `quotes`, `me
 Build archive (from repo root):
 
 ```powershell
-Compress-Archive -Path kimi_gmt_terminal\* -DestinationPath global-market-terminal-final.zip -Force
+Compress-Archive -Path ci_terminal\* -DestinationPath global-market-terminal-final.zip -Force
 ```
 
 Contents: `index.html`, `css/`, `js/` (adapters, widgets, fixtures, live.config), `fonts/`, `README.md`, `DATA_DEFINITIONS.md`.
