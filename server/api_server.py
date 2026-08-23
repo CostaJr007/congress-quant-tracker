@@ -8,7 +8,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+_ROOT_DIR = Path(__file__).resolve().parent.parent if "__file__" in globals() else Path.cwd()
+sys.path.insert(0, str(_ROOT_DIR / "src"))
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -1369,7 +1370,7 @@ def api_enrich():
 
 # ─── CI://TERMINAL LIVE feed (yfinance + congress) + static canvas ─────
 
-_GMT_DIR = Path(__file__).resolve().parent.parent / "ci_terminal"
+_GMT_DIR = _ROOT_DIR / "ci_terminal"
 
 
 @app.get("/api/terminal/health")
@@ -1702,18 +1703,18 @@ def terminal_index():
 
 # Politician headshots (bioguide jpgs) for CI://TERMINAL + API clients
 _POL_PHOTO_DIRS = [
-    Path(__file__).resolve().parent.parent / "data" / "politicians",
-    Path(__file__).resolve().parent.parent / "web_fused" / "public" / "politicians",
-    Path(__file__).resolve().parent.parent / "web" / "public" / "politicians",
+    _ROOT_DIR / "data" / "politicians",
+    _ROOT_DIR / "web_fused" / "public" / "politicians",
+    _ROOT_DIR / "web" / "public" / "politicians",
 ]
 for _pol_dir in _POL_PHOTO_DIRS:
-    if _pol_dir.is_dir():
-        app.mount(
-            "/politicians",
-            StaticFiles(directory=str(_pol_dir)),
-            name="politician_photos",
-        )
-        break
+    _pol_dir.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/politicians",
+        StaticFiles(directory=str(_pol_dir)),
+        name="politician_photos",
+    )
+    break
 
 # Mount static assets for terminal (css, js, fonts) — after routes so /terminal hits HTML first
 if _GMT_DIR.is_dir():

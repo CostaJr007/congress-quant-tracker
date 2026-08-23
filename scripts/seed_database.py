@@ -9,8 +9,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import random
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+ROOT = Path(__file__).resolve().parent.parent if "__file__" in globals() else Path.cwd()
+sys.path.insert(0, str(ROOT / "src"))
 
 from congress_quant_tracker.config import settings
 from congress_quant_tracker.database.models import (
@@ -143,12 +143,15 @@ def seed_database():
             value_range = random.choice(VALUE_RANGES)
             trade_type = random.choice(["buy", "buy", "buy", "sell", "sell", "exchange"])
             
-            # Random date in last 2 years
-            days_ago = random.randint(0, 730)
+            # Random date in last 2 years (never in future)
+            days_ago = random.randint(2, 730)
             trade_date = datetime.now() - timedelta(days=days_ago)
             
-            # Filing date is 30-45 days after trade
-            filing_date = trade_date + timedelta(days=random.randint(30, 45))
+            # Filing date is 15-45 days after trade, never exceeding current date
+            filing_delay = random.randint(15, 45)
+            filing_date = min(datetime.now(), trade_date + timedelta(days=filing_delay))
+            if filing_date < trade_date:
+                filing_date = trade_date
             
             trade = Trade(
                 politician_id=politician.id,

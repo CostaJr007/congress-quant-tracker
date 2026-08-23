@@ -10,17 +10,40 @@ import yaml
 from congress_quant_tracker.config import settings
 from congress_quant_tracker.database.models import Politician, Trade, get_engine, get_session
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent if "__file__" in globals() else Path.cwd()
 PHOTO_DIR = ROOT / "data" / "politicians"
 PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+WEB_PHOTO_DIR = ROOT / "web_fused" / "public" / "politicians"
+WEB_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
 
 YAML_PATH = ROOT / "data" / "legislators-current.yaml"
 if not YAML_PATH.exists():
     url = "https://raw.githubusercontent.com/unitedstates/congress-legislators/main/legislators-current.yaml"
-    urllib.request.urlretrieve(url, str(YAML_PATH))
+    try:
+        urllib.request.urlretrieve(url, str(YAML_PATH))
+    except Exception as e:
+        print(f"Warning downloading legislators-current: {e}")
 
-with open(YAML_PATH, "r", encoding="utf-8") as f:
-    legislators = yaml.safe_load(f)
+HIST_YAML_PATH = ROOT / "data" / "legislators-historical.yaml"
+if not HIST_YAML_PATH.exists():
+    url_hist = "https://raw.githubusercontent.com/unitedstates/congress-legislators/main/legislators-historical.yaml"
+    try:
+        urllib.request.urlretrieve(url_hist, str(HIST_YAML_PATH))
+    except Exception as e:
+        print(f"Warning downloading legislators-historical: {e}")
+
+legislators = []
+if YAML_PATH.exists():
+    with open(YAML_PATH, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+        if data:
+            legislators.extend(data)
+
+if HIST_YAML_PATH.exists():
+    with open(HIST_YAML_PATH, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+        if data:
+            legislators.extend(data)
 
 # Build comprehensive lookup table
 lookup: dict[str, dict] = {}
@@ -76,7 +99,11 @@ def download_photo_if_missing(bio_id: str) -> bool:
     if not bio_id:
         return False
     path = PHOTO_DIR / f"{bio_id}.jpg"
+    web_path = WEB_PHOTO_DIR / f"{bio_id}.jpg"
+    
     if path.exists() and path.stat().st_size > 500:
+        if not web_path.exists() or web_path.stat().st_size != path.stat().st_size:
+            web_path.write_bytes(path.read_bytes())
         return True
 
     urls = [
@@ -91,6 +118,7 @@ def download_photo_if_missing(bio_id: str) -> bool:
                 data = resp.read()
                 if len(data) > 500:
                     path.write_bytes(data)
+                    web_path.write_bytes(data)
                     print(f"Downloaded photo for {bio_id} ({len(data)} bytes)")
                     return True
         except Exception:
@@ -99,6 +127,11 @@ def download_photo_if_missing(bio_id: str) -> bool:
 
 
 MANUAL_MAP = {
+    "paul pelosi": {"bioguide_id": "P000197", "name": "Paul Pelosi", "party": "D", "state": "CA", "district": "11", "chamber": "house"},
+    "richard burr": {"bioguide_id": "B001135", "name": "Richard Burr", "party": "R", "state": "NC", "district": None, "chamber": "senate"},
+    "dianne feinstein": {"bioguide_id": "F000062", "name": "Dianne Feinstein", "party": "D", "state": "CA", "district": None, "chamber": "senate"},
+    "david perdue": {"bioguide_id": "P000612", "name": "David Perdue", "party": "R", "state": "GA", "district": None, "chamber": "senate"},
+    "kevin mccarthy": {"bioguide_id": "M001165", "name": "Kevin McCarthy", "party": "R", "state": "CA", "district": "20", "chamber": "house"},
     "marjorie taylor greene": {"bioguide_id": "G000596", "name": "Marjorie Taylor Greene", "party": "R", "state": "GA", "district": "14", "chamber": "house"},
     "linda t sanchez": {"bioguide_id": "S001156", "name": "Linda Sanchez", "party": "D", "state": "CA", "district": "38", "chamber": "house"},
     "a mitchell mcconnell": {"bioguide_id": "M000355", "name": "Mitch McConnell", "party": "R", "state": "KY", "district": None, "chamber": "senate"},

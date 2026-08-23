@@ -5,7 +5,12 @@ cd /d "%~dp0"
 set PYTHONIOENCODING=utf-8
 set MARKET_DATA_ENABLED=1
 
-start "CI API :8000" cmd /k "cd /d "%~dp0" && uv run python server\api_server.py"
+where uv >nul 2>&1
+if errorlevel 1 (
+    start "CI API :8000" cmd /k "cd /d "%~dp0" && set PYTHONIOENCODING=utf-8 && set PYTHONUTF8=1 && set MARKET_DATA_ENABLED=1 && python server\api_server.py"
+) else (
+    start "CI API :8000" cmd /k "cd /d "%~dp0" && uv run python server\api_server.py"
+)
 timeout /t 3 /nobreak >nul
 start "CI UI :3000" cmd /k "cd /d "%~dp0web_fused" && npm run dev"
 timeout /t 2 /nobreak >nul
