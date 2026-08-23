@@ -789,14 +789,36 @@ window.GMT = window.GMT || {};
       }));
       body.appendChild(bar);
 
+      // Month selection ribbon for returns leaderboard
+      const mb = el("div", { class: "month-browser", style: "border-bottom:1px solid var(--line2);padding:4px 6px;background:#050505" });
+      const chips = el("div", { class: "month-chips" });
+      const allChip = el("button", {
+        class: "mchip" + (!p.wireMonth ? " on" : ""),
+        text: "✦ ALL MONTHS",
+        onclick: () => { p.wireMonth = null; G.app.savePrefs(); G.app.loadReturns(); }
+      });
+      chips.appendChild(allChip);
+      const months = G.datasets.congressMonths || [];
+      months.slice(0, 10).forEach(m => {
+        const on = p.wireMonth === m.month;
+        const btn = el("button", {
+          class: "mchip" + (on ? " on" : ""),
+          text: m.month + (m.count ? ` ·${m.count}` : ""),
+          onclick: () => { p.wireMonth = m.month; G.app.savePrefs(); G.app.loadReturns(); }
+        });
+        chips.appendChild(btn);
+      });
+      mb.appendChild(chips);
+      body.appendChild(mb);
+
       const monthLab = p.wireMonth || "ALL MONTHS";
       body.appendChild(el("div", {
         class: "pad faint", style: "font-size:9px;padding:3px 8px",
-        text: monthLab + " · side-adj % = BUY:+Δ / SELL:−Δ · $ PnL from range mid (est.) · follows month filter"
+        text: monthLab + " · side-adj % = BUY:+Δ / SELL:−Δ · $ PnL from range mid (est.) · click member/trade to focus chart"
       }));
 
       if (loading) {
-        body.appendChild(el("div", { class: "pad dim", text: "> pricing trades via yfinance… (first load may take ~30s)" }));
+        body.appendChild(el("div", { class: "pad dim", text: "> pricing trades via yfinance… (cached)" }));
         return;
       }
       if (err) {
@@ -818,36 +840,115 @@ window.GMT = window.GMT || {};
 
       if (mode === "member") {
         data.rows.forEach((r, i) => {
-          const row = el("div", { class: "holder-row returns-row", tabindex: "0" });
-          row.appendChild(el("span", {
-            class: "rank num", style: "width:18px;font-weight:800;color:var(--org)",
+          const card = el("div", { class: "member-card", style: "margin:4px 6px;border:1px solid var(--line2);background:#080808" });
+          const head = el("div", { class: "member-card-head", style: "display:flex;align-items:center;gap:8px;padding:6px 8px;cursor:pointer" });
+          const chev = el("span", { class: "chev", text: "▶", style: "color:var(--org);font-weight:800;width:12px;font-size:10px" });
+          head.appendChild(chev);
+          head.appendChild(el("span", {
+            class: "rank num", style: "width:16px;font-weight:800;color:var(--org);font-size:11px",
             text: String(i + 1)
           }));
-          row.appendChild(renderAvatar({
+          head.appendChild(renderAvatar({
             name: r.politician, party: r.party,
             bioguide_id: r.bioguide_id, photo_url: r.photo_url
-          }, 30));
-          const meta = el("div", { class: "holder-meta" });
+          }, 32));
+          const meta = el("div", { class: "holder-meta", style: "flex:1;min-width:0" });
           const avg = r.avg_return_adj;
           meta.innerHTML =
-            `<div><span class="name">${U.esc((r.politician || "").slice(0, 22))}</span> ` +
+            `<div><span class="name" style="font-weight:800;color:var(--ink)">${U.esc(r.politician || "")}</span> ` +
             `<span class="${partyCls(r.party)}">${U.esc(r.party || "?")}</span> ` +
             `<span class="num ${avg >= 0 ? "up" : "dn"}" style="font-weight:800">${avg >= 0 ? "+" : ""}${avg}%</span>` +
-            ` <span class="faint">avg adj</span></div>` +
-            `<div class="faint">${r.trades} tx · ${r.unique_tickers} tkrs` +
-            (r.sum_pnl_mid_est != null ? ` · PnL est $${U.fmtNum(r.sum_pnl_mid_est, 0)}` : "") +
+            ` <span class="faint" style="font-size:9px">avg adj</span></div>` +
+            `<div class="faint" style="font-size:9px">${r.trades} tx · ${r.unique_tickers} tkrs` +
+            (r.sum_pnl_mid_est != null ? ` · PnL $${U.fmtNum(r.sum_pnl_mid_est, 0)}` : "") +
             (r.best_trade ? ` · best ${U.esc(r.best_trade.ticker)} ${r.best_trade.return_side_adj}%` : "") +
             `</div>`;
-          row.appendChild(meta);
-          row.addEventListener("click", () => focusPol(r.politician));
-          scroller.appendChild(row);
+          head.appendChild(meta);
+          card.appendChild(head);
+
+          const cardBody = el("div", { class: "member-card-body", style: "display:none;border-top:1px solid var(--line);background:#050505;padding:4px" });
+          const tradesList = r.trades_list || [];
+          if (tradesList.length > 0) {
+            const tbl = el("table", { class: "tbl compact" });
+            tbl.innerHTML = "<thead><tr><th>TX DATE</th><th>SIDE</th><th>TKR</th><th>PRICE</th><th>NOW</th><th>Δ%</th><th>ADJ%</th><th>PnL$</th></tr></thead>";
+            const tb = el("tbody");
+            tradesList.forEach(t => {
+              const tr = el("tr", { "data-click": "1", tabindex: "0", style: "cursor:pointer" });
+              const chg = t.change_pct;
+              const adj = t.return_side_adj;
+              tr.appendChild(el("td", { class: "faint", text: fmtDate(t.trade_date, true) }));
+              tr.appendChild(el("td", { class: t.side === "BUY" ? "up" : "dn", style: "font-weight:800", text: t.side || "?" }));
+              tr.appendChild(el("td", { class: "org", style: "font-weight:800", text: t.ticker || "—" }));
+              tr.appendChild(el("td", { class: "num dim", text: t.price_at_trade != null ? "$" + U.fmtNum(t.price_at_trade, 2) : "—" }));
+              tr.appendChild(el("td", { class: "num dim", text: t.price_now != null ? "$" + U.fmtNum(t.price_now, 2) : "—" }));
+              tr.appendChild(el("td", { class: "num " + (chg >= 0 ? "up" : "dn"), text: (chg >= 0 ? "+" : "") + (chg != null ? chg : "—") }));
+              tr.appendChild(el("td", { class: "num " + (adj >= 0 ? "up" : "dn"), style: "font-weight:800", text: (adj >= 0 ? "+" : "") + (adj != null ? adj : "—") }));
+              tr.appendChild(el("td", { class: "num dim", text: t.pnl_mid_est != null ? "$" + U.fmtNum(t.pnl_mid_est, 0) : "—" }));
+
+              tr.addEventListener("click", e => {
+                e.stopPropagation();
+                focusTrade({
+                  id: t.id,
+                  ticker: t.ticker,
+                  politician: r.politician,
+                  party: r.party,
+                  chamber: r.chamber,
+                  side: t.side,
+                  trade_date: t.trade_date,
+                  filing_date: t.filing_date,
+                  amount: t.amount,
+                  score: t.score,
+                  price: t.price_at_trade,
+                  trade_price: t.price_at_trade,
+                  price_change_pct: t.change_pct,
+                  pnl_mid_est: t.pnl_mid_est,
+                  bioguide_id: r.bioguide_id,
+                  photo_url: r.photo_url
+                });
+              });
+              tb.appendChild(tr);
+            });
+            tbl.appendChild(tb);
+            cardBody.appendChild(tbl);
+          } else {
+            cardBody.appendChild(el("div", { class: "pad faint", style: "font-size:9px", text: "No individual trade details available" }));
+          }
+          card.appendChild(cardBody);
+
+          head.addEventListener("click", () => {
+            const isOpen = cardBody.style.display !== "none";
+            cardBody.style.display = isOpen ? "none" : "block";
+            chev.textContent = isOpen ? "▶" : "▼";
+            focusPol(r.politician);
+            if (!isOpen && tradesList.length > 0) {
+              const firstTrade = tradesList[0];
+              focusTrade({
+                id: firstTrade.id,
+                ticker: firstTrade.ticker,
+                politician: r.politician,
+                party: r.party,
+                chamber: r.chamber,
+                side: firstTrade.side,
+                trade_date: firstTrade.trade_date,
+                filing_date: firstTrade.filing_date,
+                amount: firstTrade.amount,
+                score: firstTrade.score,
+                price: firstTrade.price_at_trade,
+                trade_price: firstTrade.price_at_trade,
+                bioguide_id: r.bioguide_id,
+                photo_url: r.photo_url
+              });
+            }
+          });
+
+          scroller.appendChild(card);
         });
       } else {
         const tbl = el("table", { class: "tbl compact" });
-        tbl.innerHTML = "<thead><tr><th>#</th><th></th><th>MEMBER</th><th>SIDE</th><th>TKR</th><th>TX</th><th>Δ%</th><th>ADJ%</th><th>PnL$</th></tr></thead>";
+        tbl.innerHTML = "<thead><tr><th>#</th><th></th><th>MEMBER</th><th>SIDE</th><th>TKR</th><th>TX</th><th>PRICE</th><th>NOW</th><th>Δ%</th><th>ADJ%</th><th>PnL$</th></tr></thead>";
         const tb = el("tbody");
         data.rows.forEach((r, i) => {
-          const tr = el("tr", { "data-click": "1", tabindex: "0" });
+          const tr = el("tr", { "data-click": "1", tabindex: "0", style: "cursor:pointer" });
           const chg = r.change_pct;
           const adj = r.return_side_adj;
           tr.appendChild(el("td", { class: "num org", style: "font-weight:800", text: String(i + 1) }));
@@ -863,17 +964,19 @@ window.GMT = window.GMT || {};
           }));
           tr.appendChild(el("td", { class: "org", style: "font-weight:800", text: r.ticker || "—" }));
           tr.appendChild(el("td", { class: "faint", text: fmtDate(r.trade_date, true) }));
+          tr.appendChild(el("td", { class: "num dim", text: r.price_at_trade != null ? "$" + U.fmtNum(r.price_at_trade, 2) : "—" }));
+          tr.appendChild(el("td", { class: "num dim", text: r.price_now != null ? "$" + U.fmtNum(r.price_now, 2) : "—" }));
           tr.appendChild(el("td", {
             class: "num " + (chg >= 0 ? "up" : "dn"),
-            text: (chg >= 0 ? "+" : "") + chg
+            text: (chg >= 0 ? "+" : "") + (chg != null ? chg : "—")
           }));
           tr.appendChild(el("td", {
             class: "num " + (adj >= 0 ? "up" : "dn"), style: "font-weight:800",
-            text: (adj >= 0 ? "+" : "") + adj
+            text: (adj >= 0 ? "+" : "") + (adj != null ? adj : "—")
           }));
           tr.appendChild(el("td", {
             class: "num dim",
-            text: r.pnl_mid_est != null ? U.fmtNum(r.pnl_mid_est, 0) : "—"
+            text: r.pnl_mid_est != null ? "$" + U.fmtNum(r.pnl_mid_est, 0) : "—"
           }));
           tr.addEventListener("click", () => {
             focusTrade({
@@ -887,6 +990,8 @@ window.GMT = window.GMT || {};
               filing_date: r.filing_date,
               amount: r.amount,
               score: r.score,
+              price: r.price_at_trade,
+              trade_price: r.price_at_trade,
               price_change_pct: r.change_pct,
               shares_est: r.shares_est,
               pnl_mid_est: r.pnl_mid_est,

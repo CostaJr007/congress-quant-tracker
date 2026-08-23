@@ -794,6 +794,7 @@ def build_returns_leaderboard(
                     "best": None,
                     "worst": None,
                     "tickers": set(),
+                    "trades_list": [],
                 }
                 by_m[name] = ent
             ent["n"] += 1
@@ -807,6 +808,25 @@ def build_returns_leaderboard(
                 ent["best"] = r
             if ent["worst"] is None or adj < ent["worst"]["return_side_adj"]:
                 ent["worst"] = r
+            ent["trades_list"].append({
+                "id": r["id"],
+                "ticker": r.get("ticker"),
+                "side": r.get("side"),
+                "trade_date": r.get("trade_date"),
+                "filing_date": r.get("filing_date"),
+                "amount": r.get("amount"),
+                "score": r.get("score"),
+                "price_at_trade": r.get("price_at_trade"),
+                "price_now": r.get("price_now"),
+                "change_pct": r.get("change_pct"),
+                "return_side_adj": r.get("return_side_adj"),
+                "pnl_mid_est": r.get("pnl_mid_est"),
+                "shares_est": r.get("shares_est"),
+                "politician": name,
+                "party": r.get("party"),
+                "bioguide_id": r.get("bioguide_id"),
+                "photo_url": r.get("photo_url"),
+            })
         for ent in by_m.values():
             n = max(ent["n"], 1)
             member_agg.append({
@@ -820,6 +840,7 @@ def build_returns_leaderboard(
                 "avg_return_adj": round(ent["sum_adj"] / n, 2),
                 "sum_pnl_mid_est": round(ent["sum_pnl"], 2),
                 "unique_tickers": len(ent["tickers"]),
+                "trades_list": ent["trades_list"],
                 "best_trade": {
                     "ticker": ent["best"]["ticker"],
                     "side": ent["best"]["side"],

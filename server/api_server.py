@@ -1701,6 +1701,37 @@ def terminal_index():
     return FileResponse(index, media_type="text/html")
 
 
+@app.on_event("startup")
+async def on_startup():
+    """Background cache warmup: pre-fetches market data for all active database tickers."""
+    async def _warmup():
+        try:
+            await asyncio.sleep(1.0)
+            session = get_db()
+            try:
+                tickers = [
+                    r[0]
+                    for r in session.query(Trade.ticker)
+                    .filter(Trade.ticker.isnot(None), Trade.ticker != "")
+                    .distinct()
+                    .all()
+                ]
+            finally:
+                session.close()
+            if tickers:
+                logger.info("Pre-warming market data cache for %d tickers...", len(tickers))
+                from congress_quant_tracker.enrichers.market_data import prefetch_tickers
+                import concurrent.futures
+                loop = asyncio.get_running_loop()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                    await loop.run_in_executor(pool, prefetch_tickers, tickers)
+                logger.info("Market data cache warmup complete.")
+        except Exception as e:
+            logger.warning("Cache warmup notice: %s", e)
+
+    asyncio.create_task(_warmup())
+
+
 # Politician headshots (bioguide jpgs) for CI://TERMINAL + API clients
 _POL_PHOTO_DIRS = [
     _ROOT_DIR / "data" / "politicians",
