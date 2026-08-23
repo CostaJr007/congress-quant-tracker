@@ -9,6 +9,7 @@ window.GMT = window.GMT || {};
     heatQuery: "", breadthHL: null, newsCats: [], newsQ: "", newsPaused: false,
     metalSel: "XAU", editMode: false, preset: "CONGRESS", focus: "AAPL",
     focusTicker: "AAPL", focusPolitician: null, focusTradeDate: null,
+    focusTradeType: null, focusTradePrice: null,
     wireChamber: "ALL", wireParty: "ALL", wireSide: "ALL", sectorFilter: null,
     wireMonth: null, /* null = init to newest; "" = all months; "YYYY-MM" = that month */
     wireDateField: "filing",

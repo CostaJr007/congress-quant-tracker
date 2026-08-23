@@ -86,7 +86,23 @@ window.GMT = window.GMT || {};
     lp.textContent = U.fmtNum(lastC, opts.dp != null ? opts.dp : U.dpFor(lastC));
     svg.appendChild(lp);
 
-    // optional trade-date vertical marker (congress disclosure link)
+    // deputy trade price reference line
+    if (opts.tradePrice && opts.tradePrice >= lo && opts.tradePrice <= hi) {
+      const yt = y(opts.tradePrice);
+      const isBuy = opts.tradeType !== "SELL";
+      const col = isBuy ? "#00C176" : "#FF4D4F";
+      const arrow = isBuy ? "▲" : "▼";
+      const label = isBuy ? "BUY" : "SELL";
+      svg.appendChild(svgEl("line", {
+        x1: padL, x2: W - padR, y1: yt, y2: yt,
+        stroke: col, "stroke-width": 1.2, "stroke-dasharray": "4 3", opacity: "0.95"
+      }));
+      const tTag = svgEl("text", { x: W - padR + 4, y: yt - 2, fill: col, "font-size": 8, "font-weight": 800 });
+      tTag.textContent = `${arrow} ${label} ` + U.fmtNum(opts.tradePrice, 2);
+      svg.appendChild(tTag);
+    }
+
+    // optional trade-date vertical marker & execution dot (deputy trade execution)
     if (opts.markDate) {
       let mi = -1;
       for (let i = 0; i < n; i++) {
@@ -95,12 +111,18 @@ window.GMT = window.GMT || {};
       }
       if (mi < 0) mi = 0;
       if (mi >= 0) {
+        const isBuy = opts.tradeType !== "SELL";
+        const mCol = isBuy ? "#00C176" : "#FF4D4F";
+        const py = (opts.tradePrice && opts.tradePrice >= lo && opts.tradePrice <= hi) ? y(opts.tradePrice) : y(s[mi].c);
         svg.appendChild(svgEl("line", {
           x1: x(mi), x2: x(mi), y1: padT, y2: padT + priceH + 4 + volH,
-          stroke: "#F28C00", "stroke-width": 1, "stroke-dasharray": "2 2", opacity: "0.85"
+          stroke: mCol, "stroke-width": 1.2, "stroke-dasharray": "3 2", opacity: "0.9"
         }));
-        const mt = svgEl("text", { x: U.clamp(x(mi) - 18, padL, W - 80), y: padT + 10, fill: "#F28C00", "font-size": 8 });
-        mt.textContent = "TRADE";
+        svg.appendChild(svgEl("circle", {
+          cx: x(mi), cy: py, r: 4, fill: mCol, stroke: "#000", "stroke-width": 1.5
+        }));
+        const mt = svgEl("text", { x: U.clamp(x(mi) - 18, padL, W - 80), y: padT + 10, fill: mCol, "font-size": 8, "font-weight": 800 });
+        mt.textContent = isBuy ? "▲ BUY" : "▼ SELL";
         svg.appendChild(mt);
       }
     }
@@ -247,31 +269,23 @@ window.GMT = window.GMT || {};
     lp.textContent = U.fmtNum(lastC, opts.dp != null ? opts.dp : U.dpFor(lastC));
     svg.appendChild(lp);
 
-    // Congressional Average BUY Price Line (Green dashed)
-    if (opts.avgBuyPrice && opts.avgBuyPrice >= lo && opts.avgBuyPrice <= hi) {
-      const yb = y(opts.avgBuyPrice);
+    // deputy trade price reference line
+    if (opts.tradePrice && opts.tradePrice >= lo && opts.tradePrice <= hi) {
+      const yt = y(opts.tradePrice);
+      const isBuy = opts.tradeType !== "SELL";
+      const col = isBuy ? "#00C176" : "#FF4D4F";
+      const arrow = isBuy ? "▲" : "▼";
+      const label = isBuy ? "BUY" : "SELL";
       svg.appendChild(svgEl("line", {
-        x1: padL, x2: W - padR, y1: yb, y2: yb,
-        stroke: "#00C176", "stroke-width": 1.2, "stroke-dasharray": "4 3", opacity: "0.9"
+        x1: padL, x2: W - padR, y1: yt, y2: yt,
+        stroke: col, "stroke-width": 1.2, "stroke-dasharray": "4 3", opacity: "0.95"
       }));
-      const bTag = svgEl("text", { x: W - padR + 4, y: yb - 2, fill: "#00C176", "font-size": 8, "font-weight": 800 });
-      bTag.textContent = "▲ BUY " + U.fmtNum(opts.avgBuyPrice, 2);
-      svg.appendChild(bTag);
+      const tTag = svgEl("text", { x: W - padR + 4, y: yt - 2, fill: col, "font-size": 8, "font-weight": 800 });
+      tTag.textContent = `${arrow} ${label} ` + U.fmtNum(opts.tradePrice, 2);
+      svg.appendChild(tTag);
     }
 
-    // Congressional Average SELL Price Line (Red dashed)
-    if (opts.avgSellPrice && opts.avgSellPrice >= lo && opts.avgSellPrice <= hi) {
-      const ys = y(opts.avgSellPrice);
-      svg.appendChild(svgEl("line", {
-        x1: padL, x2: W - padR, y1: ys, y2: ys,
-        stroke: "#FF4D4F", "stroke-width": 1.2, "stroke-dasharray": "4 3", opacity: "0.9"
-      }));
-      const sTag = svgEl("text", { x: W - padR + 4, y: ys - 2, fill: "#FF4D4F", "font-size": 8, "font-weight": 800 });
-      sTag.textContent = "▼ SELL " + U.fmtNum(opts.avgSellPrice, 2);
-      svg.appendChild(sTag);
-    }
-
-    // trade-date marker
+    // optional trade-date vertical marker & execution dot (deputy trade execution)
     if (opts.markDate) {
       let mi = -1;
       for (let i = 0; i < n; i++) {
@@ -279,16 +293,24 @@ window.GMT = window.GMT || {};
         if (s[i].d > opts.markDate) { mi = i; break; }
       }
       if (mi < 0) mi = 0;
-      svg.appendChild(svgEl("line", {
-        x1: x(mi), x2: x(mi), y1: padT, y2: padT + priceH + 4 + volH,
-        stroke: "#F28C00", "stroke-width": 1.5, "stroke-dasharray": "3 2", opacity: "0.95"
-      }));
-      const mt = svgEl("text", {
-        x: U.clamp(x(mi) - 16, padL, W - 70), y: padT + 10,
-        fill: "#F28C00", "font-size": 8, "font-weight": 800
-      });
-      mt.textContent = "TX";
-      svg.appendChild(mt);
+      if (mi >= 0) {
+        const isBuy = opts.tradeType !== "SELL";
+        const mCol = isBuy ? "#00C176" : "#FF4D4F";
+        const py = (opts.tradePrice && opts.tradePrice >= lo && opts.tradePrice <= hi) ? y(opts.tradePrice) : y(s[mi].c);
+        svg.appendChild(svgEl("line", {
+          x1: x(mi), x2: x(mi), y1: padT, y2: padT + priceH + 4 + volH,
+          stroke: mCol, "stroke-width": 1.4, "stroke-dasharray": "3 2", opacity: "0.9"
+        }));
+        svg.appendChild(svgEl("circle", {
+          cx: x(mi), cy: py, r: 4, fill: mCol, stroke: "#000", "stroke-width": 1.5
+        }));
+        const mt = svgEl("text", {
+          x: U.clamp(x(mi) - 16, padL, W - 70), y: padT + 10,
+          fill: mCol, "font-size": 8, "font-weight": 800
+        });
+        mt.textContent = isBuy ? "▲ BUY" : "▼ SELL";
+        svg.appendChild(mt);
+      }
     }
 
     // crosshair

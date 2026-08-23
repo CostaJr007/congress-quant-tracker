@@ -14,9 +14,12 @@ window.GMT = window.GMT || {};
   function focusTrade(t) {
     if (!t) return;
     if (t.ticker) G.state.prefs.focusTicker = t.ticker.toUpperCase();
-    if (t.politician) G.state.prefs.focusPolitician = t.politician;
-    if (t.trade_date) G.state.prefs.focusTradeDate = t.trade_date;
+    if (t.politician || t.representative) G.state.prefs.focusPolitician = t.politician || t.representative;
+    if (t.trade_date || t.transaction_date) G.state.prefs.focusTradeDate = t.trade_date || t.transaction_date;
     else G.state.prefs.focusTradeDate = null;
+    const rawSide = (t.side || t.transaction_type || t.type || "").toUpperCase();
+    G.state.prefs.focusTradeType = (rawSide.includes("BUY") || rawSide.includes("PURCHASE")) ? "BUY" : ((rawSide.includes("SELL") || rawSide.includes("SALE")) ? "SELL" : "BUY");
+    G.state.prefs.focusTradePrice = t.price || t.trade_price || null;
     G.app.savePrefs();
     G.app.onCongressFocus();
     G.inspector.open("trade", t);
@@ -29,11 +32,12 @@ window.GMT = window.GMT || {};
     G.inspector.open("politician", { name: name });
   }
 
-  function focusTicker(tk, tradeDate) {
+  function focusTicker(tk, tradeDate, tradeType, tradePrice) {
     G.state.prefs.focusTicker = (tk || "").toUpperCase();
-    // keep / set trade date so chart shows when the member traded it
     if (tradeDate) G.state.prefs.focusTradeDate = tradeDate;
     else G.state.prefs.focusTradeDate = null;
+    if (tradeType) G.state.prefs.focusTradeType = tradeType;
+    if (tradePrice != null) G.state.prefs.focusTradePrice = tradePrice;
     G.app.savePrefs();
     G.app.onCongressFocus();
   }
@@ -947,16 +951,28 @@ window.GMT = window.GMT || {};
       const chg = +(last.c - prev.c).toFixed(2);
       const chgPct = +(chg / prev.c * 100).toFixed(2);
       const styleLabel = p.chartStyle === "line" ? "LINE" : "CANDLE";
-      const pos = G.datasets.holders && G.datasets.holders.positioning;
-      const avgBuy = (chart && chart.avg_buy_price) || (pos && pos.avg_buy_price);
-      const avgSell = (chart && chart.avg_sell_price) || (pos && pos.avg_sell_price);
+      const markDate = p.focusTradeDate;
+      let tradeBar = null;
+      if (markDate && s.length) {
+        tradeBar = s.find(b => b.d === markDate) || s.find(b => b.d >= markDate);
+      }
+      const tradeType = p.focusTradeType || "BUY";
+      const tradePrice = p.focusTradePrice != null ? p.focusTradePrice : (tradeBar ? tradeBar.c : null);
+
+      let tradeChip = '';
+      if (tradePrice != null && markDate) {
+        const isBuy = tradeType === "BUY";
+        const col = isBuy ? "#00C176" : "#FF4D4F";
+        const bg = isBuy ? "rgba(0,193,118,0.15)" : "rgba(255,77,79,0.15)";
+        const icon = isBuy ? "▲" : "▼";
+        tradeChip = `<span class="chip" style="background:${bg};color:${col};border:1px solid ${col};font-weight:800;font-size:9px">${icon} ${tradeType} $${U.fmtNum(tradePrice, 2)} (${fmtDate(markDate)})</span>`;
+      }
 
       const hi = el("div", { class: "toolbar", style: "gap:8px;flex-wrap:wrap" });
       hi.innerHTML =
         `<span class="num" style="font-weight:800;font-size:14px">${U.fmtNum(last.c, 2)}</span>` +
         `<span class="num ${U.cls(chg)}">${U.arrow(chg)} ${U.fmtChg(chg, 2)} (${U.fmtPct(chgPct)})</span>` +
-        (avgBuy ? `<span class="chip" style="background:rgba(0,193,118,0.15);color:#00C176;border:1px solid #00C176;font-weight:800;font-size:9px">▲ CONG BUY $${U.fmtNum(avgBuy, 2)}</span>` : '') +
-        (avgSell ? `<span class="chip" style="background:rgba(255,77,79,0.15);color:#FF4D4F;border:1px solid #FF4D4F;font-weight:800;font-size:9px">▼ CONG SELL $${U.fmtNum(avgSell, 2)}</span>` : '') +
+        tradeChip +
         `<span class="dim">O ${U.fmtNum(last.o, 2)}</span>` +
         `<span class="dim">H ${U.fmtNum(last.h, 2)}</span>` +
         `<span class="dim">L ${U.fmtNum(last.l, 2)}</span>` +
@@ -966,14 +982,13 @@ window.GMT = window.GMT || {};
 
       const box = el("div", { class: "chart-box", "aria-label": tk + " " + styleLabel + " chart" });
       body.appendChild(box);
-      const markDate = p.focusTradeDate;
       requestAnimationFrame(() => {
         const draw = p.chartStyle === "line" ? G.charts.lineVolume : G.charts.candlestickVolume;
         draw(box, {
           series: s, dp: 2, color: "#00C176",
           markDate: markDate,
-          avgBuyPrice: avgBuy,
-          avgSellPrice: avgSell,
+          tradePrice: tradePrice,
+          tradeType: tradeType,
           aria: tk + " daily " + styleLabel.toLowerCase(),
           onPick: (i, pt) => pt && G.inspector.open("session", { sym: tk, bar: pt, index: i, total: s.length })
         });
