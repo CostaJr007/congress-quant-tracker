@@ -1,12 +1,11 @@
 """SQLAlchemy ORM models for CongressQuantTracker."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
     Boolean,
-    Column,
     Date,
     DateTime,
     Enum,
@@ -19,36 +18,41 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, relationship, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
 class Base(DeclarativeBase):
     pass
 
 
+def _utcnow() -> datetime:
+    """Naive UTC now (datetime.utcnow is deprecated on Python 3.12+)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 class Politician(Base):
     __tablename__ = "politicians"
 
-    id: Mapped[int] = Column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = Column(String(255), nullable=False, index=True)
-    chamber: Mapped[str] = Column(
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    chamber: Mapped[str] = mapped_column(
         Enum("house", "senate", name="chamber_type"), nullable=False
     )
-    party: Mapped[str] = Column(
+    party: Mapped[str] = mapped_column(
         Enum("D", "R", "I", name="party_type"), nullable=False
     )
-    state: Mapped[str] = Column(String(2), nullable=False)
-    district: Mapped[Optional[str]] = Column(String(10), nullable=True)
-    committees: Mapped[Optional[str]] = Column(Text, nullable=True)
-    external_id: Mapped[Optional[str]] = Column(String(50), nullable=True, index=True)
-    bioguide_id: Mapped[Optional[str]] = Column(String(10), nullable=True)
-    photo_url: Mapped[Optional[str]] = Column(Text, nullable=True)
-    total_trades: Mapped[int] = Column(Integer, default=0)
-    avg_score: Mapped[float] = Column(Float, default=0.0)
-    active: Mapped[bool] = Column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    state: Mapped[str] = mapped_column(String(2), nullable=False)
+    district: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    committees: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    external_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    bioguide_id: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    photo_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    total_trades: Mapped[int] = mapped_column(Integer, default=0)
+    avg_score: Mapped[float] = mapped_column(Float, default=0.0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, onupdate=_utcnow
     )
 
     trades: Mapped[list["Trade"]] = relationship(
@@ -67,14 +71,14 @@ class Politician(Base):
 class Company(Base):
     __tablename__ = "companies"
 
-    id: Mapped[int] = Column(Integer, primary_key=True, autoincrement=True)
-    ticker: Mapped[str] = Column(String(10), nullable=False, unique=True, index=True)
-    name: Mapped[str] = Column(String(255), nullable=False)
-    sector: Mapped[Optional[str]] = Column(String(100), nullable=True)
-    industry: Mapped[Optional[str]] = Column(String(100), nullable=True)
-    market_cap: Mapped[Optional[float]] = Column(Float, nullable=True)
-    beta: Mapped[Optional[float]] = Column(Float, nullable=True)
-    last_updated: Mapped[datetime] = Column(DateTime, default=datetime.utcnow)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sector: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    industry: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    market_cap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    beta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     def __repr__(self) -> str:
         return f"<Company {self.ticker} ({self.sector})>"
@@ -83,33 +87,33 @@ class Company(Base):
 class Trade(Base):
     __tablename__ = "trades"
 
-    id: Mapped[int] = Column(Integer, primary_key=True, autoincrement=True)
-    politician_id: Mapped[int] = Column(
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    politician_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("politicians.id"), nullable=False, index=True
     )
-    ticker: Mapped[str] = Column(String(10), nullable=False, index=True)
-    asset_name: Mapped[Optional[str]] = Column(String(255), nullable=True)
-    asset_type: Mapped[Optional[str]] = Column(String(50), nullable=True)
-    transaction_type: Mapped[str] = Column(
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    asset_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    asset_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    transaction_type: Mapped[str] = mapped_column(
         Enum("buy", "sell", "exchange", name="transaction_type"), nullable=False
     )
-    trade_date: Mapped[date] = Column(Date, nullable=False, index=True)
-    filing_date: Mapped[Optional[date]] = Column(Date, nullable=True, index=True)
-    value_min: Mapped[Optional[int]] = Column(Integer, nullable=True)
-    value_max: Mapped[Optional[int]] = Column(Integer, nullable=True)
-    value_range: Mapped[Optional[str]] = Column(String(50), nullable=True)
-    shares_min: Mapped[Optional[Decimal]] = Column(Numeric(18, 4), nullable=True)
-    shares_max: Mapped[Optional[Decimal]] = Column(Numeric(18, 4), nullable=True)
-    report_type: Mapped[Optional[str]] = Column(String(100), nullable=True)
-    source_url: Mapped[Optional[str]] = Column(Text, nullable=True)
-    pdf_url: Mapped[Optional[str]] = Column(Text, nullable=True)
-    notes: Mapped[Optional[str]] = Column(Text, nullable=True)
-    score: Mapped[int] = Column(Integer, default=0)
-    tag: Mapped[Optional[str]] = Column(String(20), nullable=True)
-    reason: Mapped[Optional[str]] = Column(Text, nullable=True)
-    owner: Mapped[Optional[str]] = Column(String(10), nullable=True)
-    sector: Mapped[Optional[str]] = Column(String(100), nullable=True)
-    created_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    filing_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    value_min: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    value_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    value_range: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    shares_min: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
+    shares_max: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
+    report_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    pdf_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    score: Mapped[int] = mapped_column(Integer, default=0)
+    tag: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    owner: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    sector: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     politician: Mapped["Politician"] = relationship(
         "Politician", back_populates="trades"
@@ -132,22 +136,22 @@ class Trade(Base):
 class OptionsTrade(Base):
     __tablename__ = "options_trades"
 
-    id: Mapped[int] = Column(Integer, primary_key=True, autoincrement=True)
-    trade_id: Mapped[int] = Column(
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("trades.id"), nullable=False, index=True
     )
-    option_type: Mapped[str] = Column(
+    option_type: Mapped[str] = mapped_column(
         Enum("call", "put", name="option_type"), nullable=False
     )
-    strike: Mapped[Optional[float]] = Column(Float, nullable=True)
-    expiration_date: Mapped[Optional[date]] = Column(Date, nullable=True)
-    contracts_min: Mapped[Optional[int]] = Column(Integer, nullable=True)
-    contracts_max: Mapped[Optional[int]] = Column(Integer, nullable=True)
-    premium_min: Mapped[Optional[int]] = Column(Integer, nullable=True)
-    premium_max: Mapped[Optional[int]] = Column(Integer, nullable=True)
-    premium_range: Mapped[Optional[str]] = Column(String(50), nullable=True)
-    underlying_asset: Mapped[Optional[str]] = Column(String(10), nullable=True)
-    notes: Mapped[Optional[str]] = Column(Text, nullable=True)
+    strike: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    expiration_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    contracts_min: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    contracts_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    premium_min: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    premium_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    premium_range: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    underlying_asset: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     trade: Mapped["Trade"] = relationship("Trade", back_populates="options")
 
@@ -158,18 +162,18 @@ class OptionsTrade(Base):
 class UpdateLog(Base):
     __tablename__ = "updates_log"
 
-    id: Mapped[int] = Column(Integer, primary_key=True, autoincrement=True)
-    update_type: Mapped[str] = Column(String(50), nullable=False, index=True)
-    status: Mapped[str] = Column(
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    update_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
         Enum("started", "in_progress", "completed", "failed", name="update_status"),
         nullable=False,
         default="started",
     )
-    started_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow)
-    completed_at: Mapped[Optional[datetime]] = Column(DateTime, nullable=True)
-    records_processed: Mapped[int] = Column(Integer, default=0)
-    error_message: Mapped[Optional[str]] = Column(Text, nullable=True)
-    details: Mapped[Optional[str]] = Column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    records_processed: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     def __repr__(self) -> str:
         return f"<UpdateLog {self.update_type} [{self.status}]>"

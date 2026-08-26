@@ -8,14 +8,19 @@ stores trades and scores them.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, date, timedelta
-from typing import Optional
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from congress_quant_tracker.common import (
+    find_politician,
+    refresh_politician_stats,
+    score_trades,
+)
 from congress_quant_tracker.config import settings
 from congress_quant_tracker.database.models import (
-    OptionsTrade,
     Politician,
     Trade,
     UpdateLog,
@@ -25,10 +30,6 @@ from congress_quant_tracker.database.models import (
 )
 from congress_quant_tracker.enrichers.tavily_enricher import TavilyEnricher
 from congress_quant_tracker.fetchers.congress_invests import (
-    classify_asset,
-    parse_date,
-    parse_option_details,
-    sanitize_trade_dates,
     _load_members_db,
     _normalize_party,
 )
@@ -37,6 +38,19 @@ from congress_quant_tracker.parsers.house_ptr_parser import parse_house_ptr
 from congress_quant_tracker.scoring.scorer import TradeScorer
 
 logger = logging.getLogger(__name__)
+
+try:
+    from scripts.fix_politician_photos import MANUAL_MAP, download_photo_if_missing
+except Exception:
+    # scripts/ is not always importable (e.g. API server context)
+    _ROOT = Path(__file__).resolve().parents[3]
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    try:
+        from scripts.fix_politician_photos import MANUAL_MAP, download_photo_if_missing
+    except Exception:
+        MANUAL_MAP: dict = {}
+        download_photo_if_missing = lambda bio_id: False  # noqa: E731
 
 
 class OfficialHousePipeline:
@@ -52,9 +66,9 @@ class OfficialHousePipeline:
 
     def run(
         self,
-        years: Optional[list[int]] = None,
+        years: list[int] | None = None,
         max_filings: int = 80,
-        since_days: Optional[int] = 120,
+        since_days: int | None = 120,
         use_tavily: bool = True,
         skip_download_if_exists: bool = True,
     ) -> dict:
@@ -75,6 +89,7 @@ class OfficialHousePipeline:
 
         stats = {
             "filings_indexed": 0,
+            "filers_indexed": 0,
             "filings_selected": 0,
             "pdfs_downloaded": 0,
             "pdfs_parsed": 0,
@@ -94,6 +109,32 @@ class OfficialHousePipeline:
             with HouseOfficialFetcher() as fetcher:
                 index = fetcher.fetch_ptr_index(years=years)
                 stats["filings_indexed"] = len(index)
+
+                # Register every filer in the index (any filing type) before
+                # any PDF work — no politician can pass hidden, even when
+                # parsing is capped or a PDF fails.
+                filers = fetcher.fetch_all_filers(years=years)
+                stats["filers_indexed"] = len(filers)
+                seen_names: set[str] = set()
+                for f in filers:
+                    fname = (f.get("name") or "").strip()
+                    if not fname or fname.lower() in seen_names:
+                        continue
+                    seen_names.add(fname.lower())
+                    try:
+                        with session.begin_nested():
+                            _, created = self._ensure_politician(session, fname, filing=f)
+                            if created:
+                                stats["politicians_added"] += 1
+                    except Exception as e:
+                        stats["errors"] += 1
+                        logger.debug("Filer registration failed %s: %s", fname, e)
+                session.commit()
+                print(
+                    f"[House Official] indexed={stats['filings_indexed']} "
+                    f"filers={stats['filers_indexed']} "
+                    f"politicians_registered={stats['politicians_added']}"
+                )
 
                 cutoff = None
                 if since_days is not None:
@@ -196,16 +237,85 @@ class OfficialHousePipeline:
         finally:
             session.close()
 
-    def _lookup_party(self, name: str) -> tuple[str, str, Optional[str]]:
+    def _lookup_member(self, name: str) -> tuple[str, str, str | None, str | None]:
+        import re
         key = (name or "").lower().strip()
-        info = self.members.get(key, {})
-        if not info and " " in key:
-            parts = key.split()
+        cleaned = re.sub(r"\b(mr|dr|hon|mrs|ms|jr|sr|ii|iii|iv)\b", "", key, flags=re.I)
+        cleaned = " ".join(cleaned.split())
+
+        info = MANUAL_MAP.get(cleaned) or MANUAL_MAP.get(key) or {}
+
+        if not info:
+            info = self.members.get(cleaned, {}) or self.members.get(key, {})
+        if not info and " " in cleaned:
+            parts = cleaned.split()
             info = self.members.get(f"{parts[0]} {parts[-1]}", {}) or self.members.get(parts[-1], {})
+
         party = info.get("party") or "I"
         if party not in ("D", "R", "I"):
             party = _normalize_party(str(party))
-        return party, info.get("state") or "", info.get("district")
+        bio_id = info.get("bioguide_id")
+        return party, info.get("state") or "", info.get("district"), bio_id
+
+    def _ensure_politician(
+        self,
+        session: Session,
+        name: str,
+        filing: dict | None = None,
+        pol_info: dict | None = None,
+    ) -> tuple[Politician, bool]:
+        """Find or create a House politician. Returns (politician, created).
+
+        Name variants are deduplicated via bioguide_id and via
+        (state, district) so the same person is never registered twice.
+        """
+        pol = find_politician(session, name, chamber="house")
+        party, state, district, bio_id = self._lookup_member(name)
+        filing = filing or {}
+        pol_info = pol_info or {}
+        if not pol and bio_id:
+            pol = session.query(Politician).filter(Politician.bioguide_id == bio_id).first()
+        # Same state+district = same person even if the name varies
+        lookup_state = pol_info.get("state") or filing.get("state") or state or ""
+        lookup_district = pol_info.get("district") or filing.get("district") or (
+            str(district) if district is not None else None
+        )
+        if not pol and lookup_state and lookup_district:
+            pol = (
+                session.query(Politician)
+                .filter(
+                    Politician.chamber == "house",
+                    Politician.state == lookup_state[:2],
+                    Politician.district == str(lookup_district),
+                )
+                .first()
+            )
+        if pol:
+            if party in ("D", "R") and pol.party == "I":
+                pol.party = party
+            if state and not pol.state:
+                pol.state = state[:2]
+            if bio_id and not pol.bioguide_id:
+                pol.bioguide_id = bio_id
+                pol.photo_url = f"/politicians/{bio_id}.jpg"
+            return pol, False
+
+        state = pol_info.get("state") or filing.get("state") or state or ""
+        district = pol_info.get("district") or filing.get("district") or (
+            str(district) if district is not None else None
+        )
+        pol = Politician(
+            name=name,
+            chamber="house",
+            party=party if party in ("D", "R", "I") else "I",
+            state=(state or "")[:2],
+            district=str(district) if district else None,
+            bioguide_id=bio_id,
+            photo_url=f"/politicians/{bio_id}.jpg" if bio_id else None,
+        )
+        session.add(pol)
+        session.flush()
+        return pol, True
 
     def _store_trade(
         self,
@@ -216,178 +326,47 @@ class OfficialHousePipeline:
         pol_info: dict,
         stats: dict,
     ) -> bool:
-        ticker = (trade.get("ticker") or "").upper().strip()
-        if not ticker or not politician_name:
+        """Store one parsed PTR trade via the shared ingestion path.
+
+        Returns True only when a NEW row was inserted; duplicates are merged
+        by the ingest layer (never silently dropped).
+        """
+        from congress_quant_tracker.services.ingest import normalize_record, store_trade
+
+        raw = {**trade}
+        raw.setdefault("politician_name", politician_name)
+        # Index-level filing date fills rows the parser could not read
+        if not raw.get("filing_date"):
+            raw["filing_date"] = filing.get("filing_date")
+        raw["pdf_url"] = raw.get("pdf_url") or filing.get("pdf_url") or ""
+        raw["source"] = "house_official"
+
+        rec, reason = normalize_record(raw)
+        if not rec:
+            if reason == "sample_data_rejected":
+                stats["samples_rejected"] = stats.get("samples_rejected", 0) + 1
             return False
 
-        trade_date = parse_date(str(trade.get("trade_date") or ""))
-        filing_date = parse_date(str(trade.get("filing_date") or "")) or filing.get("filing_date")
-        trade_date, filing_date, _ = sanitize_trade_dates(
-            trade_date, filing_date, trade.get("asset_name") or ""
+        pol, created = self._ensure_politician(
+            session, rec["politician_name"], filing=filing, pol_info=pol_info
         )
-        if not trade_date:
-            return False
-
-        # Politician
-        pol = (
-            session.query(Politician)
-            .filter(Politician.name.ilike(f"%{politician_name}%"))
-            .first()
-        )
-        if not pol:
-            party, state, district = self._lookup_party(politician_name)
-            state = pol_info.get("state") or filing.get("state") or state or ""
-            district = pol_info.get("district") or filing.get("district") or (
-                str(district) if district is not None else None
-            )
-            pol = Politician(
-                name=politician_name,
-                chamber="house",
-                party=party if party in ("D", "R", "I") else "I",
-                state=(state or "")[:2],
-                district=str(district) if district else None,
-            )
-            session.add(pol)
-            session.flush()
+        if created:
             stats["politicians_added"] += 1
-        else:
-            party, state, district = self._lookup_party(politician_name)
-            if party in ("D", "R") and pol.party == "I":
-                pol.party = party
-            if state and not pol.state:
-                pol.state = state[:2]
 
-        tx_type = (trade.get("transaction_type") or "buy").lower()
-        if tx_type not in ("buy", "sell", "exchange"):
-            tx_type = "buy"
+        if pol.bioguide_id:
+            try:
+                download_photo_if_missing(pol.bioguide_id)
+            except Exception:
+                pass
 
-        existing = (
-            session.query(Trade)
-            .filter(
-                Trade.politician_id == pol.id,
-                Trade.ticker == ticker,
-                Trade.trade_date == trade_date,
-                Trade.transaction_type == tx_type,
-            )
-            .first()
-        )
-        if existing:
-            # refresh pdf url if missing
-            if not existing.pdf_url and filing.get("pdf_url"):
-                existing.pdf_url = filing["pdf_url"]
-            return False
-
-        asset_name = trade.get("asset_name") or ticker
-        asset_type = trade.get("asset_type") or classify_asset(asset_name, ticker)
-        value_min = int(trade.get("value_min") or trade.get("amount_min") or 0)
-        value_max = int(trade.get("value_max") or trade.get("amount_max") or 0)
-
-        # Tavily news soft boost stored in reason later via scorer
-        boost = int(trade.get("news_score_boost") or 0)
-
-        row = Trade(
-            politician_id=pol.id,
-            ticker=ticker,
-            asset_name=asset_name,
-            asset_type=asset_type,
-            transaction_type=tx_type,
-            trade_date=trade_date,
-            filing_date=filing_date,
-            value_min=value_min,
-            value_max=value_max,
-            value_range=trade.get("value_range") or "",
-            pdf_url=filing.get("pdf_url") or trade.get("pdf_url") or "",
-            owner=trade.get("owner") or "",
-            sector=trade.get("sector") or "",
-            score=boost,  # temporary; rescore overwrites if 0-only path — set 0 and apply boost after
-            tag="routine",
-            reason="",
-            notes="house_official",
-        )
-        # Keep score 0 so scorer runs; boost applied after
-        row.score = 0
-        session.add(row)
-        session.flush()
-
-        if boost:
-            row.notes = f"house_official;tavily_boost={boost}"
-
-        opt = parse_option_details(asset_name, asset_type)
-        if opt and asset_type and str(asset_type).startswith("option"):
-            session.add(
-                OptionsTrade(
-                    trade_id=row.id,
-                    option_type=opt.get("option_type") or "call",
-                    strike=opt.get("strike"),
-                    expiration_date=opt.get("expiration_date"),
-                    underlying_asset=ticker,
-                    premium_min=value_min,
-                    premium_max=value_max,
-                    premium_range=row.value_range,
-                )
-            )
-        return True
+        status = store_trade(session, rec, pol)
+        if status == "merged":
+            stats["trades_merged"] = stats.get("trades_merged", 0) + 1
+        return status == "added"
 
     def _score_unscored(self, session: Session, stats: dict) -> None:
-        trades = (
-            session.query(Trade)
-            .filter((Trade.score == 0) | (Trade.score.is_(None)))
-            .all()
-        )
-        if not trades:
-            return
-        pols = {p.id: p for p in session.query(Politician).all()}
-        trade_dicts = []
-        for t in trades:
-            pol = pols.get(t.politician_id)
-            trade_dicts.append({
-                "id": t.id,
-                "politician_id": t.politician_id,
-                "politician_name": pol.name if pol else "",
-                "ticker": t.ticker,
-                "trade_date": str(t.trade_date) if t.trade_date else None,
-                "filing_date": str(t.filing_date) if t.filing_date else None,
-                "transaction_type": t.transaction_type,
-                "value_max": t.value_max or 0,
-                "asset_type": t.asset_type or "stock",
-                "owner": t.owner or "",
-            })
-        committee_map = {
-            pid: [c.strip() for c in (p.committees or "").split(",") if c.strip()]
-            for pid, p in pols.items()
-            if p.committees
-        }
-        from congress_quant_tracker.enrichers.sectors import resolve_sector, scorer_sector
-
-        sector_map = {}
-        for t in trades:
-            label = resolve_sector(t.ticker, t.sector)
-            if label:
-                sector_map[t.ticker] = scorer_sector(label)
-        scored = self.scorer.score_batch(trade_dicts, committee_map, sector_map)
-        by_id = {s["id"]: s for s in scored}
-        for t in trades:
-            s = by_id.get(t.id)
-            if not s:
-                continue
-            score = int(s.get("score") or 0)
-            # apply tavily boost from notes
-            if t.notes and "tavily_boost=" in t.notes:
-                try:
-                    boost = int(t.notes.split("tavily_boost=")[1].split(";")[0])
-                    score = min(100, score + boost)
-                except Exception:
-                    pass
-            t.score = score
-            t.tag = s.get("tag", "routine")
-            t.reason = s.get("reason", "")
-            stats["trades_scored"] += 1
-        session.commit()
+        trades = session.query(Trade).filter(Trade.tag.is_(None)).all()
+        score_trades(session, trades, stats, apply_tavily_boost=True)
 
     def _update_politician_stats(self, session: Session) -> None:
-        for pol in session.query(Politician).all():
-            trades = session.query(Trade).filter(Trade.politician_id == pol.id).all()
-            pol.total_trades = len(trades)
-            scores = [t.score for t in trades if t.score]
-            pol.avg_score = sum(scores) / len(scores) if scores else 0.0
-        session.commit()
+        refresh_politician_stats(session)

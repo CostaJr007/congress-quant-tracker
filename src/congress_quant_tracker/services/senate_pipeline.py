@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
 
+from congress_quant_tracker.common import (
+    find_politician,
+    refresh_politician_stats,
+    score_trades,
+)
 from congress_quant_tracker.config import settings
 from congress_quant_tracker.database.models import (
     Politician,
@@ -16,17 +20,13 @@ from congress_quant_tracker.database.models import (
     init_db,
 )
 from congress_quant_tracker.fetchers.congress_invests import (
-    parse_date,
-    sanitize_trade_dates,
-    classify_asset,
     _load_members_db,
     _normalize_party,
 )
 from congress_quant_tracker.fetchers.senate_official import (
-    probe_efd_access,
-    fetch_senate_via_congressinvests_sync,
     SenateEfdPlaywrightFetcher,
-    parse_senate_ptr_html,
+    fetch_senate_via_congressinvests_sync,
+    probe_efd_access,
 )
 from congress_quant_tracker.scoring.scorer import TradeScorer
 
@@ -70,6 +70,7 @@ class SenatePipeline:
             "strategy_requested": strategy,
             "strategy_used": None,
             "efd_probe": None,
+            "reports_indexed": 0,
             "trades_fetched": 0,
             "trades_added": 0,
             "politicians_added": 0,
@@ -95,14 +96,32 @@ class SenatePipeline:
                 try:
                     # Prefer lightweight HTTP session (proxy-friendly)
                     from congress_quant_tracker.fetchers.senate_efd_http import SenateEfdHttpClient
-                    from congress_quant_tracker.fetchers.senate_official import parse_senate_ptr_html
+                    from congress_quant_tracker.fetchers.senate_official import (
+                        parse_senate_ptr_html,
+                    )
 
-                    with SenateEfdHttpClient() as efd:
+                    with SenateEfdHttpClient(probe=probe) as efd:
                         agree = efd.accept_terms()
                         print(f"[Senate] eFD agree: {agree}")
-                        reports = efd.fetch_ptr_index(max_rows=max_efd_reports)
-                        print(f"[Senate] eFD reports: {len(reports)}")
-                        for rep in reports[:max_efd_reports]:
+                        # Larger index so every senator who filed is registered,
+                        # even when report detail parsing is capped.
+                        index_reports = efd.fetch_ptr_index(max_rows=max(max_efd_reports, 200))
+                        stats["reports_indexed"] = len(index_reports)
+                        print(f"[Senate] eFD reports: {len(index_reports)}")
+                        for rep in index_reports:
+                            rname = (rep.get("name") or "").strip()
+                            if not rname:
+                                continue
+                            try:
+                                with session.begin_nested():
+                                    _, created = self._ensure_senator(session, rname)
+                                    if created:
+                                        stats["politicians_added"] += 1
+                            except Exception as e:
+                                stats["errors"] += 1
+                                logger.debug("Senator register fail %s: %s", rname, e)
+                        session.commit()
+                        for rep in index_reports[:max_efd_reports]:
                             try:
                                 if not rep.get("url"):
                                     continue
@@ -117,9 +136,23 @@ class SenatePipeline:
                     print(f"[Senate] eFD HTTP failed ({e}); trying Playwright...")
                     try:
                         fetcher = SenateEfdPlaywrightFetcher(headless=headless)
-                        reports = fetcher.fetch_ptr_index(max_rows=max_efd_reports)
-                        print(f"[Senate] eFD Playwright reports: {len(reports)}")
-                        for rep in reports[:max_efd_reports]:
+                        index_reports = fetcher.fetch_ptr_index(max_rows=max(max_efd_reports, 200))
+                        stats["reports_indexed"] = len(index_reports)
+                        print(f"[Senate] eFD Playwright reports: {len(index_reports)}")
+                        for rep in index_reports:
+                            rname = (rep.get("name") or "").strip()
+                            if not rname:
+                                continue
+                            try:
+                                with session.begin_nested():
+                                    _, created = self._ensure_senator(session, rname)
+                                    if created:
+                                        stats["politicians_added"] += 1
+                            except Exception as e:
+                                stats["errors"] += 1
+                                logger.debug("Senator register fail %s: %s", rname, e)
+                        session.commit()
+                        for rep in index_reports[:max_efd_reports]:
                             try:
                                 if not rep.get("url"):
                                     continue
@@ -145,12 +178,12 @@ class SenatePipeline:
 
             for t in trades:
                 try:
-                    if self._store(session, t, stats):
-                        stats["trades_added"] += 1
+                    with session.begin_nested():
+                        if self._store(session, t, stats):
+                            stats["trades_added"] += 1
                 except Exception as e:
                     stats["errors"] += 1
                     logger.debug("store fail: %s", e)
-                    session.rollback()
             session.commit()
 
             print("[Senate] Scoring...")
@@ -195,128 +228,62 @@ class SenatePipeline:
         finally:
             session.close()
 
+    def _ensure_senator(self, session, name: str) -> tuple[Politician, bool]:
+        """Find or create a Senate politician. Returns (politician, created)."""
+        pol = find_politician(session, name, chamber="senate")
+        if pol:
+            return pol, False
+        key = name.lower()
+        info = self.members.get(key, {})
+        if not info and " " in key:
+            info = self.members.get(f"{key.split()[0]} {key.split()[-1]}", {}) or {}
+        party = info.get("party") or "I"
+        if party not in ("D", "R", "I"):
+            party = _normalize_party(str(party))
+        bio_id = info.get("bioguide_id")
+        if bio_id:
+            by_bio = session.query(Politician).filter(Politician.bioguide_id == bio_id).first()
+            if by_bio:
+                return by_bio, False
+        pol = Politician(
+            name=name,
+            chamber="senate",
+            party=party,
+            state=(info.get("state") or "")[:2],
+            bioguide_id=bio_id,
+        )
+        session.add(pol)
+        session.flush()
+        return pol, True
+
     def _store(self, session, trade: dict, stats: dict) -> bool:
-        # Normalize both congressinvests shape and efd html shape
-        name = (trade.get("member") or trade.get("name") or "").strip()
-        ticker = (trade.get("ticker") or "").upper().strip()
-        if not name or not ticker or ticker in ("--", "N/A"):
+        """Store one Senate trade via the shared ingestion path.
+
+        Returns True only when a NEW row was inserted; duplicates are merged
+        (never silently dropped) by the ingest layer.
+        """
+        from congress_quant_tracker.services.ingest import normalize_record, store_trade
+
+        raw = {**trade, "source": trade.get("source") or "senate"}
+        rec, reason = normalize_record(raw)
+        if not rec:
+            if reason == "sample_data_rejected":
+                stats["samples_rejected"] = stats.get("samples_rejected", 0) + 1
             return False
 
-        trade_date = parse_date(str(trade.get("trade_date") or ""))
-        filing_date = parse_date(str(trade.get("filing_date") or ""))
-        trade_date, filing_date, _ = sanitize_trade_dates(
-            trade_date, filing_date, trade.get("asset_name") or ""
-        )
-        if not trade_date:
-            return False
-
-        pol = session.query(Politician).filter(Politician.name.ilike(f"%{name}%")).first()
-        if not pol:
-            key = name.lower()
-            info = self.members.get(key, {})
-            if not info and " " in key:
-                info = self.members.get(f"{key.split()[0]} {key.split()[-1]}", {}) or {}
-            party = info.get("party") or trade.get("party") or "I"
-            if party not in ("D", "R", "I"):
-                party = _normalize_party(str(party))
-            pol = Politician(
-                name=name,
-                chamber="senate",
-                party=party,
-                state=(info.get("state") or trade.get("state") or "")[:2],
-                bioguide_id=info.get("bioguide_id"),
-            )
-            session.add(pol)
-            session.flush()
+        name = rec["politician_name"]
+        pol, created = self._ensure_senator(session, name)
+        if created:
             stats["politicians_added"] += 1
-        else:
-            if pol.chamber != "senate":
-                # don't overwrite house members with same name edge cases
-                pass
 
-        tx = (trade.get("transaction_type") or "buy").lower()
-        if tx in ("purchase", "p"):
-            tx = "buy"
-        elif tx in ("sale", "s", "sale_partial", "sale_full"):
-            tx = "sell"
-
-        exists = (
-            session.query(Trade)
-            .filter(
-                Trade.politician_id == pol.id,
-                Trade.ticker == ticker,
-                Trade.trade_date == trade_date,
-                Trade.transaction_type == tx,
-            )
-            .first()
-        )
-        if exists:
-            return False
-
-        asset_name = trade.get("asset_name") or ticker
-        row = Trade(
-            politician_id=pol.id,
-            ticker=ticker,
-            asset_name=asset_name,
-            asset_type=trade.get("asset_type") or classify_asset(asset_name, ticker),
-            transaction_type=tx,
-            trade_date=trade_date,
-            filing_date=filing_date,
-            value_min=int(trade.get("amount_min") or trade.get("value_min") or 0),
-            value_max=int(trade.get("amount_max") or trade.get("value_max") or 0),
-            value_range=trade.get("amount_range") or trade.get("value_range") or "",
-            pdf_url=trade.get("pdf_url") or trade.get("url") or "",
-            owner=trade.get("owner") or "",
-            notes=trade.get("source") or "senate",
-            score=0,
-            tag="routine",
-        )
-        session.add(row)
-        return True
+        status = store_trade(session, rec, pol)
+        if status == "merged":
+            stats["trades_merged"] = stats.get("trades_merged", 0) + 1
+        return status == "added"
 
     def _score(self, session, stats: dict) -> None:
-        trades = session.query(Trade).filter((Trade.score == 0) | (Trade.score.is_(None))).all()
-        if not trades:
-            return
-        pols = {p.id: p for p in session.query(Politician).all()}
-        dicts = []
-        for t in trades:
-            pol = pols.get(t.politician_id)
-            dicts.append({
-                "id": t.id,
-                "politician_id": t.politician_id,
-                "politician_name": pol.name if pol else "",
-                "ticker": t.ticker,
-                "trade_date": str(t.trade_date) if t.trade_date else None,
-                "filing_date": str(t.filing_date) if t.filing_date else None,
-                "transaction_type": t.transaction_type,
-                "value_max": t.value_max or 0,
-                "asset_type": t.asset_type or "stock",
-                "owner": t.owner or "",
-            })
-        from congress_quant_tracker.enrichers.sectors import resolve_sector, scorer_sector
-
-        sector_map = {}
-        for t in trades:
-            label = resolve_sector(t.ticker, t.sector)
-            if label:
-                sector_map[t.ticker] = scorer_sector(label)
-        scored = self.scorer.score_batch(dicts, {}, sector_map)
-        by_id = {s["id"]: s for s in scored}
-        for t in trades:
-            s = by_id.get(t.id)
-            if not s:
-                continue
-            t.score = s.get("score", 0)
-            t.tag = s.get("tag", "routine")
-            t.reason = s.get("reason", "")
-            stats["trades_scored"] += 1
-        session.commit()
+        trades = session.query(Trade).filter(Trade.tag.is_(None)).all()
+        score_trades(session, trades, stats)
 
     def _update_pols(self, session) -> None:
-        for pol in session.query(Politician).filter(Politician.chamber == "senate").all():
-            trades = session.query(Trade).filter(Trade.politician_id == pol.id).all()
-            pol.total_trades = len(trades)
-            scores = [t.score for t in trades if t.score]
-            pol.avg_score = sum(scores) / len(scores) if scores else 0.0
-        session.commit()
+        refresh_politician_stats(session, chamber="senate")

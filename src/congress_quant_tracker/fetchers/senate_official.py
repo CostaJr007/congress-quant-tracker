@@ -18,12 +18,11 @@ import hashlib
 import logging
 import re
 from datetime import datetime, date
-from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlencode
 
 import httpx
 
+from congress_quant_tracker.common import normalize_transaction_type
 from congress_quant_tracker.config import settings
 
 logger = logging.getLogger(__name__)
@@ -32,6 +31,10 @@ EFD_HOME = "https://efdsearch.senate.gov/search/home/"
 EFD_SEARCH = "https://efdsearch.senate.gov/search/"
 EFD_DATA = "https://efdsearch.senate.gov/search/report/data/"
 CONGRESSINVESTS = settings.CONGRESSINVESTS_API.rstrip("/")
+
+# From the eFD search form (see senate_efd_http)
+REPORT_TYPE_PTR = 11
+FILER_TYPE_SENATOR = 1
 
 
 def _parse_us_date(s: str) -> Optional[date]:
@@ -219,32 +222,27 @@ class SenateEfdPlaywrightFetcher:
                 page.goto(EFD_SEARCH, wait_until="domcontentloaded", timeout=60_000)
                 self._accept_terms(page)
 
-                # Try report data endpoint via page.evaluate fetch with session cookies
-                payload = {
-                    "draw": 1,
-                    "start": 0,
-                    "length": max_rows,
-                    "search": {"value": "Periodic Transaction Report", "regex": False},
-                    "order": [{"column": 3, "dir": "desc"}],
-                    "columns": [
-                        {"data": "senator_first_name", "name": "", "searchable": True, "orderable": True},
-                        {"data": "senator_last_name", "name": "", "searchable": True, "orderable": True},
-                        {"data": "report_type", "name": "", "searchable": True, "orderable": False},
-                        {"data": "date_received", "name": "", "searchable": True, "orderable": True},
-                    ],
-                }
+                # Try report data endpoint via page.evaluate fetch with session cookies.
+                # DataTables expects form-encoded params (mirrors SenateEfdHttpClient).
                 result = page.evaluate(
                     """async (payload) => {
+                        const params = new URLSearchParams();
+                        for (const k in payload) params.set(k, payload[k]);
+                        const csrf = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || '';
                         const r = await fetch('/search/report/data/', {
                           method: 'POST',
-                          headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-                          body: JSON.stringify(payload),
-                          credentials: 'same-origin'
+                          headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRFToken': csrf,
+                          },
+                          body: params.toString(),
+                          credentials: 'same-origin',
                         });
                         const text = await r.text();
                         return {status: r.status, text};
                     }""",
-                    payload,
+                    self._efd_payload(0, max_rows),
                 )
                 if result.get("status") == 200:
                     import json
@@ -252,6 +250,9 @@ class SenateEfdPlaywrightFetcher:
                     data = json.loads(result["text"])
                     for row in data.get("data") or []:
                         reports.append(self._normalize_row(row))
+                    if not reports:
+                        # Empty result — fall back to scraping the rendered table
+                        reports.extend(self._scrape_search_table(page))
                 else:
                     logger.warning(
                         "eFD data endpoint status=%s body=%s",
@@ -296,7 +297,67 @@ class SenateEfdPlaywrightFetcher:
             except Exception:
                 pass
 
-    def _normalize_row(self, row: dict) -> dict:
+    def _efd_payload(self, start: int = 0, length: int = 100) -> dict[str, str]:
+        """DataTables form-encoded payload (same shape as SenateEfdHttpClient)."""
+        data: dict[str, str] = {
+            "draw": "1",
+            "start": str(start),
+            "length": str(length),
+            "order[0][column]": "4",
+            "order[0][dir]": "desc",
+            "search[value]": "",
+            "search[regex]": "false",
+            "report_types": f"[{REPORT_TYPE_PTR}]",
+            "filer_types": f"[{FILER_TYPE_SENATOR}]",
+            "submitted_start_date": "01/01/2025",
+            "submitted_end_date": "",
+            "candidate_state": "",
+            "senator_state": "",
+            "office_id": "",
+            "first_name": "",
+            "last_name": "",
+        }
+        for i in range(5):
+            data[f"columns[{i}][data]"] = str(i)
+            data[f"columns[{i}][name]"] = ""
+            data[f"columns[{i}][searchable]"] = "true"
+            data[f"columns[{i}][orderable]"] = "true"
+            data[f"columns[{i}][search][value]"] = ""
+            data[f"columns[{i}][search][regex]"] = "false"
+        return data
+
+    @staticmethod
+    def _normalize_cells(cells: list) -> dict:
+        """Normalize a DataTables row (list of HTML cell strings)."""
+        def strip_html(s: str) -> str:
+            return re.sub(r"<[^>]+>", "", s or "").strip()
+
+        first = strip_html(cells[0]) if len(cells) > 0 else ""
+        last = strip_html(cells[1]) if len(cells) > 1 else ""
+        filing = strip_html(cells[4]) if len(cells) > 4 else ""
+        href = ""
+        blob = " ".join(str(c) for c in cells)
+        m = re.search(r'href="([^"]*ptr[^"]*)"', blob, re.I)
+        if m:
+            href = m.group(1)
+        if href and not href.startswith("http"):
+            href = f"https://efdsearch.senate.gov{href}"
+        rid = hashlib.md5((href or f"{first}{last}{filing}").encode()).hexdigest()[:12]
+        return {
+            "report_id": rid,
+            "first_name": first,
+            "last_name": last,
+            "name": f"{first} {last}".strip(),
+            "filing_date": _parse_us_date(filing),
+            "url": href,
+            "chamber": "senate",
+            "source": "senate_efd_playwright",
+        }
+
+    def _normalize_row(self, row) -> dict:
+        # DataTables may return list-of-cells rows or dict rows
+        if isinstance(row, list):
+            return self._normalize_cells(row)
         # Field names vary by eFD version
         first = row.get("first_name") or row.get("senator_first_name") or ""
         last = row.get("last_name") or row.get("senator_last_name") or ""
@@ -391,8 +452,7 @@ def parse_senate_ptr_html(html: str, meta: Optional[dict] = None) -> list[dict]:
         re.I,
     )
     for m in row_pat.finditer(plain):
-        tx_raw = m.group("tx").lower()
-        tx = "buy" if "purchase" in tx_raw else ("exchange" if "exchange" in tx_raw else "sell")
+        tx = normalize_transaction_type(m.group("tx"))
         ticker = (m.group("ticker") or "").upper()
         if ticker in ("--", "N/A", ""):
             # try extract from asset

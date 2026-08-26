@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+_THIS_FILE = Path(__file__).resolve() if "__file__" in globals() else Path.cwd()
+BASE_DIR = _THIS_FILE.parent.parent.parent if "__file__" in globals() else Path.cwd()
 
 # override=True so .env wins over empty/stale shell env vars
 load_dotenv(BASE_DIR / ".env", override=True)
@@ -56,6 +57,15 @@ class Settings:
     HTTP_PROXY: str = os.getenv("HTTP_PROXY", "") or os.getenv("HTTPS_PROXY", "")
 
     DISCORD_WEBHOOK_URL: str = os.getenv("DISCORD_WEBHOOK_URL", "")
+
+    # Automatic background data sync on server startup
+    AUTO_SYNC_ON_STARTUP: bool = os.getenv("AUTO_SYNC_ON_STARTUP", "1") == "1"
+    STARTUP_SYNC_DAYS: int = int(os.getenv("STARTUP_SYNC_DAYS", "90"))
+    STARTUP_SYNC_MAX: int = int(os.getenv("STARTUP_SYNC_MAX", "60"))
+
+    # API bind address (127.0.0.1 = local only; use 0.0.0.0 to expose on LAN)
+    API_HOST: str = os.getenv("API_HOST", "127.0.0.1")
+    API_PORT: int = int(os.getenv("API_PORT", "8000"))
 
     def ensure_dirs(self) -> None:
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)

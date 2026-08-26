@@ -1,9 +1,7 @@
 """Company data enrichment using yfinance."""
 
+import logging
 from datetime import datetime
-from typing import Optional
-
-import pandas as pd
 
 from congress_quant_tracker.config import settings
 
@@ -11,6 +9,8 @@ try:
     import yfinance as yf
 except ImportError:
     yf = None
+
+logger = logging.getLogger(__name__)
 
 
 class CompanyEnricher:
@@ -60,7 +60,7 @@ class CompanyEnricher:
         """Enrich a batch of tickers."""
         return [self.enrich_ticker(t) for t in tickers]
 
-    def get_or_create_company(self, session, ticker: str) -> "Company":
+    def get_or_create_company(self, session, ticker: str) -> "Company":  # noqa: F821
         """Get existing company record or create a new one."""
         from congress_quant_tracker.database.models import Company
 
@@ -83,9 +83,17 @@ class CompanyEnricher:
         return company
 
     def enrich_all_tickers_in_db(self, session) -> int:
-        """Enrich all companies for tickers found in trades that are not in companies table."""
+        """Enrich companies for tickers found in trades.
+
+        Three passes:
+          1. static sector map onto any company missing a sector (no network)
+          2. yfinance creation of Company rows for traded tickers not yet stored
+          3. yfinance refresh of EXISTING companies still missing a sector
+             (previously these were never enriched and stayed blank forever)
+        """
         from sqlalchemy import distinct
-        from congress_quant_tracker.database.models import Trade, Company
+
+        from congress_quant_tracker.database.models import Company, Trade
 
         traded_tickers = [
             row[0]
@@ -103,18 +111,48 @@ class CompanyEnricher:
 
         from congress_quant_tracker.enrichers.sectors import TICKER_SECTOR
 
-        # Backfill static sector onto existing companies first (no network)
-        for company in session.query(Company).filter(
-            (Company.sector.is_(None)) | (Company.sector == "")
-        ).all():
+        # Pass 1: static map backfill (no network)
+        stale_companies = (
+            session.query(Company)
+            .filter((Company.sector.is_(None)) | (Company.sector == ""))
+            .all()
+        )
+        for company in stale_companies:
             mapped = TICKER_SECTOR.get((company.ticker or "").upper())
             if mapped:
                 company.sector = mapped
                 count += 1
 
+        # Pass 2: create missing rows
         for ticker in new_tickers:
             self.get_or_create_company(session, ticker)
             count += 1
 
         session.commit()
+
+        # Pass 3: yfinance refresh for companies still without a sector
+        if not settings.NO_YF and yf is not None:
+            still_stale = (
+                session.query(Company)
+                .filter((Company.sector.is_(None)) | (Company.sector == ""))
+                .all()
+            )
+            for company in still_stale:
+                try:
+                    info = self.enrich_ticker(company.ticker)
+                except Exception as e:
+                    logger.warning("yfinance enrich failed for %s: %s", company.ticker, e)
+                    continue
+                if info.get("sector"):
+                    company.name = info.get("name") or company.name
+                    company.sector = info["sector"]
+                    company.industry = info.get("industry") or company.industry
+                    if info.get("market_cap") is not None:
+                        company.market_cap = info["market_cap"]
+                    if info.get("beta") is not None:
+                        company.beta = info["beta"]
+                    company.last_updated = datetime.utcnow()
+                    count += 1
+            session.commit()
+
         return count

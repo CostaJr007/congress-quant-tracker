@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 """
-Congress Trade Tracker - Data Seeder
-Popula o database com dados de exemplo pra testar o dashboard
+Congress Trade Tracker - Data Seeder (DEV ONLY)
+
+Popula um database DESCARTAVEL com dados ALEATORIOS de exemplo.
+NAO representa dados reais de congresso.
+
+PROTECOES:
+  * exige SEED_ALLOW=1 no ambiente (opt-in explicito)
+  * recusa rodar contra a base padrao (congress_quant_tracker.db);
+    aponte DATABASE_URL para um banco de teste, ex.:
+      set DATABASE_URL=sqlite:///seed_dev.db && python scripts/seed_database.py
+
+Este script ja contaminou a base real uma vez com ~220 trades aleatorios
+("Sample trade for ..."). Nao remova as protecoes abaixo.
 """
 
+import os
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -14,9 +26,24 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from congress_quant_tracker.config import settings
 from congress_quant_tracker.database.models import (
-    Politician, Trade, OptionsTrade, Company, 
+    Politician, Trade, OptionsTrade, Company,
     get_engine, get_session, init_db
 )
+
+DEFAULT_DB_MARKER = "congress_quant_tracker.db"
+
+
+def _guard() -> None:
+    """Refuse to wipe/seed the production database."""
+    if os.getenv("SEED_ALLOW") != "1":
+        print("[ABORTADO] Este script gera dados FAKE e apaga o banco alvo.")
+        print("Para usar em um banco de TESTE:")
+        print('  set SEED_ALLOW=1 && set DATABASE_URL=sqlite:///seed_dev.db')
+        sys.exit(1)
+    if DEFAULT_DB_MARKER in (settings.DATABASE_URL or ""):
+        print(f"[ABORTADO] DATABASE_URL aponta para a base real ({settings.DATABASE_URL}).")
+        print("Aponte DATABASE_URL para um banco descartavel antes de semear.")
+        sys.exit(1)
 
 # Sample politicians
 POLITICIANS = [
@@ -80,8 +107,9 @@ VALUE_RANGES = [
 ]
 
 def seed_database():
-    """Seed database with sample data"""
-    print("🌱 Seeding database with sample data...")
+    """Seed a DISPOSABLE dev database with random sample data."""
+    _guard()
+    print("🌱 Seeding DEV database with sample data...")
     
     # Initialize database
     engine = get_engine(settings.DATABASE_URL)

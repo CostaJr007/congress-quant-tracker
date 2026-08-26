@@ -9,6 +9,8 @@ from urllib.parse import urlencode
 
 import httpx
 
+from congress_quant_tracker.common import normalize_transaction_type
+
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://congressinfor-production.up.railway.app"
@@ -231,11 +233,7 @@ def sanitize_trade_dates(
 def normalize_trade(raw: dict) -> dict:
     """Normalize a CongressInvests trade to our schema."""
     member = raw.get("member", "")
-    tx_type = raw.get("trade_type", "").lower()
-    if tx_type == "purchase":
-        tx_type = "buy"
-    elif tx_type in ("sale", "sale_full", "sale_partial"):
-        tx_type = "sell"
+    tx_type = normalize_transaction_type(raw.get("trade_type"))
 
     amount_min, amount_max, amount_str = _parse_amount(raw.get("amount", ""))
     asset_name = raw.get("asset", "") or ""
@@ -369,37 +367,45 @@ async def fetch_all_trades(max_pages: int = 50) -> list[dict]:
     for chamber in ["house", "senate"]:
         offset = 0
         for _ in range(max_pages):
-            try:
-                trades = await fetch_trades(chamber=chamber, limit=200, offset=offset)
-                if not trades:
+            # Per-page retry: a transient failure must not truncate history
+            trades = None
+            for attempt in range(3):
+                try:
+                    trades = await fetch_trades(chamber=chamber, limit=200, offset=offset)
                     break
+                except Exception as e:
+                    logger.warning(
+                        "CongressInvests fetch error %s @offset %s (attempt %s/3): %s",
+                        chamber, offset, attempt + 1, e,
+                    )
+                    if attempt < 2:
+                        await asyncio.sleep(3 * (attempt + 1))
+            if not trades:
+                break
 
-                for t in trades:
-                    # Enrich with member DB (try full name, then last name)
-                    member_key = (t["member"] or "").lower().strip()
-                    member_info = members_db.get(member_key, {})
-                    if not member_info and " " in member_key:
-                        # "Nancy Pelosi" -> try last token; also strip suffixes
-                        last = member_key.split()[-1]
-                        member_info = members_db.get(last, {})
-                    t["party"] = member_info.get("party") or "I"
-                    t["state"] = member_info.get("state", "") or ""
-                    t["district"] = member_info.get("district")
-                    if member_info.get("chamber"):
-                        t["chamber"] = member_info["chamber"]
-                    if member_info.get("bioguide_id"):
-                        t["bioguide_id"] = member_info["bioguide_id"]
-                    t["asset_type"] = classify_asset(t["asset_name"], t.get("ticker", ""))
-                    t["option_details"] = parse_option_details(t["asset_name"], t["asset_type"])
-                    t["filing_id"] = _filing_id(chamber, t["trade_date"], t["member"], t["ticker"])
+            for t in trades:
+                # Enrich with member DB (try full name, then last name)
+                member_key = (t["member"] or "").lower().strip()
+                member_info = members_db.get(member_key, {})
+                if not member_info and " " in member_key:
+                    # "Nancy Pelosi" -> try last token; also strip suffixes
+                    last = member_key.split()[-1]
+                    member_info = members_db.get(last, {})
+                t["party"] = member_info.get("party") or "I"
+                t["state"] = member_info.get("state", "") or ""
+                t["district"] = member_info.get("district")
+                if member_info.get("chamber"):
+                    t["chamber"] = member_info["chamber"]
+                if member_info.get("bioguide_id"):
+                    t["bioguide_id"] = member_info["bioguide_id"]
+                t["asset_type"] = classify_asset(t["asset_name"], t.get("ticker", ""))
+                t["option_details"] = parse_option_details(t["asset_name"], t["asset_type"])
+                t["filing_id"] = _filing_id(chamber, t["trade_date"], t["member"], t["ticker"])
 
-                all_trades.extend(trades)
-                offset += 200
+            all_trades.extend(trades)
+            offset += 200
 
-                if len(trades) < 200:
-                    break
-            except Exception as e:
-                logger.error(f"Error fetching {chamber} trades at offset {offset}: {e}")
+            if len(trades) < 200:
                 break
 
     return all_trades

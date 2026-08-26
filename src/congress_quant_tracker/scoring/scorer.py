@@ -1,12 +1,15 @@
 # scoring/scorer.py — 9-signal suspicion scoring system for congressional trades
 # Merged from disclose project, adapted for congress-quant-tracker ORM
 
+import logging
 import re
 from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 
 from congress_quant_tracker.config import settings
+
+logger = logging.getLogger(__name__)
 
 try:
     import yfinance as yf
@@ -136,7 +139,8 @@ class TradeScorer:
             pct_change = ((price_end - price_start) / price_start) * 100
             if pct_change < CONTRARIAN_DROP_THRESHOLD:
                 return POINTS_CONTRARIAN_BUY, f"Contrarian: {ticker} {pct_change:.1f}% (+{POINTS_CONTRARIAN_BUY})"
-        except Exception: pass
+        except Exception as e:
+            logger.debug("Contrarian lookup failed for %s: %s", ticker, e)
         return 0, ""
 
     def score_options_trade(self, asset_type: str) -> Tuple[int, str]:
@@ -167,7 +171,8 @@ class TradeScorer:
                 delta = abs((tx_date - edate_val).days)
                 if delta <= 7:
                     return POINTS_EARNINGS_PROXIMITY, f"Within {delta}d of earnings (+{POINTS_EARNINGS_PROXIMITY})"
-        except Exception: pass
+        except Exception as e:
+            logger.debug("Earnings proximity lookup failed for %s: %s", ticker, e)
         return 0, ""
 
     def score_trade(self, trade: Dict, cluster_results: Dict = None, sector: str = "",

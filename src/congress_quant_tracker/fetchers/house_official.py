@@ -55,6 +55,7 @@ class HouseOfficialFetcher:
         self.download_dir = settings.PDF_DOWNLOAD_DIR / "house"
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.client = httpx.Client(timeout=settings.FETCH_TIMEOUT_SECONDS, headers=UA, follow_redirects=True)
+        self._index_cache: dict[int, list[dict]] = {}
 
     def close(self) -> None:
         self.client.close()
@@ -73,6 +74,67 @@ class HouseOfficialFetcher:
         r.raise_for_status()
         return r.content
 
+    def _parse_index(self, raw: bytes, year: int) -> list[dict]:
+        """Parse FD.zip bytes into filing rows (any FilingType)."""
+        rows: list[dict] = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                xml_name = next((n for n in zf.namelist() if n.lower().endswith(".xml")), None)
+                if not xml_name:
+                    logger.warning("No XML in FD.zip for %s", year)
+                    return rows
+                root = ET.fromstring(zf.read(xml_name))
+        except Exception as e:
+            logger.warning("Bad FD.zip for %s: %s", year, e)
+            return rows
+
+        for m in root.findall("Member"):
+            ft = (m.findtext("FilingType") or "").strip()
+            doc_id = (m.findtext("DocID") or "").strip()
+            if not doc_id:
+                continue
+            y = (m.findtext("Year") or str(year)).strip()
+            first = (m.findtext("First") or "").strip()
+            last = (m.findtext("Last") or "").strip()
+            prefix = (m.findtext("Prefix") or "").strip()
+            state_dst = (m.findtext("StateDst") or "").strip()
+            filing_raw = (m.findtext("FilingDate") or "").strip()
+            state = state_dst[:2] if len(state_dst) >= 2 else state_dst
+            district = state_dst[2:] if len(state_dst) > 2 else None
+            rows.append({
+                "doc_id": doc_id,
+                "filing_type": ft,
+                "year": int(y) if y.isdigit() else year,
+                "first_name": first,
+                "last_name": last,
+                "name": f"{first} {last}".strip(),
+                "prefix": prefix,
+                "state": state,
+                "district": district,
+                "state_dst": state_dst,
+                "filing_date": _parse_us_date(filing_raw),
+                "filing_date_raw": filing_raw,
+                "chamber": "house",
+                "source": "house_official",
+                "pdf_url": HOUSE_PTR_PDF.format(
+                    year=y if y.isdigit() else year, doc_id=doc_id
+                ),
+            })
+        return rows
+
+    def _download_index(self, year: int) -> list[dict]:
+        """Download + parse FD.zip once per fetcher instance."""
+        if year in self._index_cache:
+            return self._index_cache[year]
+        try:
+            raw = self.download_fd_zip(year)
+        except Exception as e:
+            logger.warning("Failed FD.zip for %s: %s", year, e)
+            return []
+        rows = self._parse_index(raw, year)
+        self._index_cache[year] = rows
+        return rows
+
     def fetch_ptr_index(self, years: Optional[list[int]] = None) -> list[dict]:
         """Return all PTR (FilingType=P) filings for the given years, newest first."""
         if years is None:
@@ -81,58 +143,10 @@ class HouseOfficialFetcher:
 
         filings: list[dict] = []
         for year in years:
-            try:
-                raw = self.download_fd_zip(year)
-            except Exception as e:
-                logger.warning("Failed FD.zip for %s: %s", year, e)
-                continue
-
-            try:
-                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-                    xml_name = next((n for n in zf.namelist() if n.lower().endswith(".xml")), None)
-                    if not xml_name:
-                        logger.warning("No XML in FD.zip for %s", year)
-                        continue
-                    root = ET.fromstring(zf.read(xml_name))
-            except Exception as e:
-                logger.warning("Bad FD.zip for %s: %s", year, e)
-                continue
-
-            for m in root.findall("Member"):
-                ft = (m.findtext("FilingType") or "").strip()
-                if ft != FILING_PTR:
+            for row in self._download_index(year):
+                if row["filing_type"] != FILING_PTR:
                     continue
-                doc_id = (m.findtext("DocID") or "").strip()
-                if not doc_id:
-                    continue
-                y = (m.findtext("Year") or str(year)).strip()
-                first = (m.findtext("First") or "").strip()
-                last = (m.findtext("Last") or "").strip()
-                prefix = (m.findtext("Prefix") or "").strip()
-                state_dst = (m.findtext("StateDst") or "").strip()
-                filing_raw = (m.findtext("FilingDate") or "").strip()
-                state = state_dst[:2] if len(state_dst) >= 2 else state_dst
-                district = state_dst[2:] if len(state_dst) > 2 else None
-                name = f"{first} {last}".strip()
-                if prefix and prefix.lower() not in name.lower():
-                    # keep Hon. out of name for matching
-                    pass
-                filings.append({
-                    "doc_id": doc_id,
-                    "year": int(y) if y.isdigit() else year,
-                    "first_name": first,
-                    "last_name": last,
-                    "name": name,
-                    "prefix": prefix,
-                    "state": state,
-                    "district": district,
-                    "state_dst": state_dst,
-                    "filing_date": _parse_us_date(filing_raw),
-                    "filing_date_raw": filing_raw,
-                    "chamber": "house",
-                    "source": "house_official",
-                    "pdf_url": HOUSE_PTR_PDF.format(year=y, doc_id=doc_id),
-                })
+                filings.append(row)
 
         filings.sort(
             key=lambda x: x["filing_date"] or date.min,
@@ -140,6 +154,22 @@ class HouseOfficialFetcher:
         )
         logger.info("House PTR index: %s filings across years %s", len(filings), years)
         return filings
+
+    def fetch_all_filers(self, years: Optional[list[int]] = None) -> list[dict]:
+        """All members who filed any disclosure in the index (any FilingType).
+
+        Used to register every House filer even when PDF parsing is capped
+        or individual PDFs fail — nothing passes hidden.
+        """
+        if years is None:
+            y = datetime.now().year
+            years = [y, y - 1]
+
+        filers: list[dict] = []
+        for year in years:
+            filers.extend(self._download_index(year))
+        logger.info("House filers index: %s filings across years %s", len(filers), years)
+        return filers
 
     def pdf_path(self, doc_id: str) -> Path:
         return self.download_dir / f"{doc_id}.pdf"

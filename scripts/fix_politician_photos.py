@@ -32,16 +32,21 @@ if not HIST_YAML_PATH.exists():
     except Exception as e:
         print(f"Warning downloading legislators-historical: {e}")
 
+try:
+    from yaml import CSafeLoader as Loader
+except ImportError:
+    from yaml import SafeLoader as Loader
+
 legislators = []
 if YAML_PATH.exists():
     with open(YAML_PATH, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+        data = yaml.load(f, Loader=Loader)
         if data:
             legislators.extend(data)
 
 if HIST_YAML_PATH.exists():
     with open(HIST_YAML_PATH, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+        data = yaml.load(f, Loader=Loader)
         if data:
             legislators.extend(data)
 
@@ -107,19 +112,21 @@ def download_photo_if_missing(bio_id: str) -> bool:
         return True
 
     urls = [
-        f"https://theunitedstates.io/images/congress/225x275/{bio_id}.jpg",
-        f"https://unitedstates.github.io/images/congress/225x275/{bio_id}.jpg",
         f"https://raw.githubusercontent.com/unitedstates/images/gh-pages/congress/225x275/{bio_id}.jpg",
+        f"https://raw.githubusercontent.com/unitedstates/images/gh-pages/congress/450x550/{bio_id}.jpg",
+        f"https://bioguide.congress.gov/photo/{bio_id}.jpg",
+        f"https://raw.githubusercontent.com/unitedstates/images/gh-pages/congress/original/{bio_id}.jpg",
+        f"https://unitedstates.github.io/images/congress/225x275/{bio_id}.jpg",
     ]
     for url in urls:
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = resp.read()
                 if len(data) > 500:
                     path.write_bytes(data)
                     web_path.write_bytes(data)
-                    print(f"Downloaded photo for {bio_id} ({len(data)} bytes)")
+                    print(f"Downloaded photo for {bio_id} ({len(data)} bytes) from {url}")
                     return True
         except Exception:
             continue
@@ -140,6 +147,21 @@ MANUAL_MAP = {
     "thomas h tuberville": {"bioguide_id": "T000278", "name": "Tommy Tuberville", "party": "R", "state": "AL", "district": None, "chamber": "senate"},
     "rafael e cruz": {"bioguide_id": "C001098", "name": "Ted Cruz", "party": "R", "state": "TX", "district": None, "chamber": "senate"},
     "matthew robert van epps": {"bioguide_id": "V000137", "name": "Matt Van Epps", "party": "R", "state": "TN", "district": "07", "chamber": "house"},
+    "richard dean dr mccormick": {"bioguide_id": "M001218", "name": "Rich McCormick", "party": "R", "state": "GA", "district": "06", "chamber": "house"},
+    "richard mccormick": {"bioguide_id": "M001218", "name": "Rich McCormick", "party": "R", "state": "GA", "district": "06", "chamber": "house"},
+    "richard w allen": {"bioguide_id": "A000372", "name": "Rick W. Allen", "party": "R", "state": "GA", "district": "12", "chamber": "house"},
+    "rick allen": {"bioguide_id": "A000372", "name": "Rick W. Allen", "party": "R", "state": "GA", "district": "12", "chamber": "house"},
+    "daniel crenshaw": {"bioguide_id": "C001120", "name": "Dan Crenshaw", "party": "R", "state": "TX", "district": "02", "chamber": "house"},
+    "dan crenshaw": {"bioguide_id": "C001120", "name": "Dan Crenshaw", "party": "R", "state": "TX", "district": "02", "chamber": "house"},
+    "christian d menefee": {"bioguide_id": "M001245", "name": "Christian Menefee", "party": "D", "state": "TX", "district": "18", "chamber": "house"},
+    "christian menefee": {"bioguide_id": "M001245", "name": "Christian Menefee", "party": "D", "state": "TX", "district": "18", "chamber": "house"},
+    "april mcclain delaney": {"bioguide_id": "M001232", "name": "April McClain Delaney", "party": "D", "state": "MD", "district": "06", "chamber": "house"},
+    "david j taylor": {"bioguide_id": "T000490", "name": "David J. Taylor", "party": "R", "state": "OH", "district": "02", "chamber": "house"},
+    "john j mr mcguire iii": {"bioguide_id": "M001239", "name": "John McGuire", "party": "R", "state": "VA", "district": "05", "chamber": "house"},
+    "derek tran": {"bioguide_id": "T000491", "name": "Derek Tran", "party": "D", "state": "CA", "district": "45", "chamber": "house"},
+    "julie johnson": {"bioguide_id": "J000310", "name": "Julie Johnson", "party": "D", "state": "TX", "district": "32", "chamber": "house"},
+    "kelly louise morrison": {"bioguide_id": "M001234", "name": "Kelly Morrison", "party": "D", "state": "MN", "district": "03", "chamber": "house"},
+    "tim moore": {"bioguide_id": "M001236", "name": "Tim Moore", "party": "R", "state": "NC", "district": "14", "chamber": "house"},
 }
 
 

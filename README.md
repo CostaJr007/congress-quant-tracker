@@ -80,6 +80,8 @@ copy .env.example .env   # Windows
 | `DISCORD_WEBHOOK_URL` | — | optional alerts on new / flagged trades |
 | `HTTP_PROXY` | — | HTTPS proxy if Senate eFD is blocked |
 | `DATABASE_URL` | local SQLite | database URL |
+| `API_HOST` | `127.0.0.1` | API bind address (`0.0.0.0` exposes on LAN) |
+| `API_PORT` | `8000` | API port |
 
 ### 3. Run API + UI
 
@@ -113,6 +115,23 @@ uv run python scripts/rescore.py           # rescore only
 ```
 
 HTTP equivalents live under `POST /api/pipeline/*`.
+
+### Data guarantees
+
+All sources funnel through **one ingestion path**
+(`src/congress_quant_tracker/services/ingest.py`):
+
+- Validation & normalization before anything touches the DB (ticker, side,
+  dates via the option-expiration sanitizer, value ranges, bounded strings).
+- Provenance on every row: `Trade.notes` stores the source tag
+  (`house_official`, `senate`, ...).
+- Same-day/same-side duplicates are **merged** (widened ranges, backfilled
+  fields), never silently dropped.
+- Demo/sample payloads are rejected at the door.
+- `scripts/purge_sample_data.py` removes legacy seeded rows (dry-run by
+  default; `--apply` to execute). The old `scripts/seed_database.py` refuses
+  to touch the production DB unless `SEED_ALLOW=1` **and** a disposable
+  `DATABASE_URL` are set.
 
 ---
 
@@ -182,15 +201,25 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ```
 congress-quant-tracker/
-├── server/api_server.py          # FastAPI
-├── src/congress_quant_tracker/   # fetchers, parsers, scoring, analyzers
-│   ├── enrichers/                # market, terminal, sectors
-│   └── agent/                    # CI://COPILOT
-├── ci_terminal/                  # CI://TERMINAL static desk
-├── web_fused/                    # Next.js UI
-├── scripts/                      # update, enrich, rescore
-├── dashboard/                    # optional Streamlit
-├── tests/
+├── server/
+│   ├── api_server.py              # FastAPI app factory + static mounts
+│   ├── deps.py                    # shared DB session, serializers, aggregates
+│   └── routers/                   # one module per resource area
+│       ├── core.py                #   health, dashboard, search, meta
+│       ├── trades.py              #   trade list/detail, months, market
+│       ├── politicians.py         #   list/detail, leaderboard
+│       ├── stocks.py              #   stock aggregation
+│       ├── analyze.py             #   party / sector / options analyzers
+│       ├── pipeline.py            #   update / rescore / enrich triggers
+│       └── terminal.py            #   CI://TERMINAL live feed + copilot
+├── src/congress_quant_tracker/    # fetchers, parsers, scoring, analyzers
+│   ├── enrichers/                 # market, terminal, sectors
+│   └── agent/                     # CI://COPILOT
+├── ci_terminal/                   # CI://TERMINAL static desk
+├── web_fused/                     # Next.js UI
+├── scripts/                       # update, enrich, rescore
+├── dashboard/                     # optional Streamlit
+├── tests/                         # pytest (unit + API via TestClient)
 ├── pyproject.toml
 └── README.md
 ```
@@ -223,7 +252,7 @@ gh repo edit CostaJr007/congress-quant-tracker --visibility private
 | `uv run python scripts/update_official.py` | House |
 | `uv run python scripts/update_senate.py` | Senate |
 | `uv run python scripts/enrich_all.py` | Sectors + photos + options + rescore |
-| `uv run pytest` | Unit tests |
+| `uv run pytest` | Unit tests + API tests (temp SQLite, no network) |
 
 ---
 

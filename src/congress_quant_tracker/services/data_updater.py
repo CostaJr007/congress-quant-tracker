@@ -3,13 +3,16 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from congress_quant_tracker.common import (
+    find_politician,
+    refresh_politician_stats,
+    score_trades,
+)
 from congress_quant_tracker.config import settings
 from congress_quant_tracker.database.models import (
-    Company,
     OptionsTrade,
     Politician,
     Trade,
@@ -20,11 +23,9 @@ from congress_quant_tracker.database.models import (
 )
 from congress_quant_tracker.enrichers.company_enricher import CompanyEnricher
 from congress_quant_tracker.fetchers.congress_invests import (
-    fetch_all_trades,
-    parse_date,
     classify_asset,
+    fetch_all_trades,
     parse_option_details,
-    _load_members_db,
 )
 from congress_quant_tracker.scoring.scorer import TradeScorer
 
@@ -74,12 +75,15 @@ class DataUpdateService:
 
             # Phase 2: Store in database
             print("[Phase 2/4] Storing trades in database...")
-            for trade_data in all_trades:
+            for i, trade_data in enumerate(all_trades, 1):
                 try:
-                    self._store_trade(session, trade_data, stats)
+                    with session.begin_nested():
+                        self._store_trade(session, trade_data, stats)
                 except Exception as e:
                     logger.debug(f"Error storing trade: {e}")
                     continue
+                if i % 500 == 0:
+                    session.commit()
 
             # Phase 3: Score trades
             print("[Phase 3/4] Scoring trades...")
@@ -127,24 +131,48 @@ class DataUpdateService:
 
         return stats
 
+    def _merge_into_existing(self, existing: Trade, trade_data: dict) -> bool:
+        """Backfill/widen an existing duplicate instead of dropping data (delegates
+        to the shared ingestion module)."""
+        from congress_quant_tracker.services.ingest import merge_into_existing
+
+        return merge_into_existing(existing, self._canonical_view(trade_data))
+
+    @staticmethod
+    def _canonical_view(trade_data: dict) -> dict:
+        """CongressInvests-shaped dict → canonical ingest keys."""
+        return {
+            "politician_name": trade_data.get("member", ""),
+            "ticker": trade_data.get("ticker"),
+            "asset_name": trade_data.get("asset_name"),
+            "transaction_type": trade_data.get("transaction_type"),
+            "trade_date": trade_data.get("trade_date"),
+            "filing_date": trade_data.get("filing_date"),
+            "value_min": trade_data.get("amount_min"),
+            "value_max": trade_data.get("amount_max"),
+            "value_range": trade_data.get("amount_range"),
+            "pdf_url": trade_data.get("pdf_url"),
+            "owner": trade_data.get("owner"),
+            "sector": trade_data.get("sector"),
+        }
+
     def _store_trade(self, session: Session, trade_data: dict, stats: dict) -> None:
         """Store a single trade from CongressInvests API."""
-        member_name = trade_data.get("member", "").strip()
+        from congress_quant_tracker.services.ingest import normalize_record, store_trade
+
+        member_name = str(trade_data.get("member") or "").strip()
         if not member_name:
             return
 
-        ticker = trade_data.get("ticker", "").upper()
-        if not ticker:
+        rec, reason = normalize_record(trade_data)
+        if not rec:
+            if reason == "sample_data_rejected":
+                stats["samples_rejected"] = stats.get("samples_rejected", 0) + 1
             return
 
-        trade_date = parse_date(trade_data.get("trade_date"))
-        if not trade_date:
-            return
-
-        # Get or create politician
-        politician = session.query(Politician).filter(
-            Politician.name.ilike(f"%{member_name}%")
-        ).first()
+        # Ensure the politician FIRST — a skipped/duplicate trade must never
+        # hide a member who appears in the feed.
+        politician = find_politician(session, member_name)
 
         if not politician:
             chamber = (trade_data.get("chamber") or "house").lower()
@@ -173,119 +201,24 @@ class DataUpdateService:
             if trade_data.get("bioguide_id") and not politician.bioguide_id:
                 politician.bioguide_id = trade_data["bioguide_id"]
 
-        # Check for existing trade (dedup)
-        existing = session.query(Trade).filter(
-            Trade.politician_id == politician.id,
-            Trade.ticker == ticker,
-            Trade.trade_date == trade_date,
-            Trade.transaction_type == trade_data.get("transaction_type", "buy"),
-        ).first()
-
-        if existing:
-            return
-
-        # Create trade
-        asset_type = trade_data.get("asset_type") or classify_asset(
-            trade_data.get("asset_name", ""), ticker
-        )
-        trade = Trade(
-            politician_id=politician.id,
-            ticker=ticker,
-            asset_name=trade_data.get("asset_name", ""),
-            asset_type=asset_type,
-            transaction_type=trade_data.get("transaction_type", "buy"),
-            trade_date=trade_date,
-            filing_date=parse_date(trade_data.get("filing_date")),
-            value_min=trade_data.get("amount_min", 0),
-            value_max=trade_data.get("amount_max", 0),
-            value_range=trade_data.get("amount_range", ""),
-            pdf_url=trade_data.get("pdf_url", ""),
-            owner=trade_data.get("owner", ""),
-            sector=trade_data.get("sector", ""),
-        )
-        session.add(trade)
-        session.flush()
-        stats["trades_added"] += 1
-
-        # Options sub-record when applicable
-        opt = trade_data.get("option_details") or parse_option_details(
-            trade.asset_name or "", asset_type
-        )
-        if opt:
-            session.add(
-                OptionsTrade(
-                    trade_id=trade.id,
-                    option_type=opt.get("option_type") or ("put" if asset_type == "option_put" else "call"),
-                    strike=opt.get("strike"),
-                    expiration_date=opt.get("expiration_date"),
-                    underlying_asset=ticker,
-                    premium_min=trade.value_min,
-                    premium_max=trade.value_max,
-                    premium_range=trade.value_range,
-                )
-            )
-            stats["options_added"] = stats.get("options_added", 0) + 1
+        inner: dict = {}
+        status = store_trade(session, rec, politician, inner)
+        if status == "added":
+            stats["trades_added"] += 1
+            if str(rec["asset_type"]).startswith("option"):
+                stats["options_added"] = stats.get("options_added", 0) + 1
+        elif status == "merged":
+            stats["trades_updated"] = stats.get("trades_updated", 0) + 1
+        else:
+            stats["trades_deduped"] = stats.get("trades_deduped", 0) + 1
 
     def _score_all_trades(self, session: Session, stats: dict, force: bool = False) -> None:
         """Score trades (unscored only, or all if force=True)."""
         if force:
             trades = session.query(Trade).all()
         else:
-            trades = session.query(Trade).filter(
-                (Trade.score == 0) | (Trade.score.is_(None))
-            ).all()
-        if not trades:
-            return
-
-        # Prefetch politicians and companies
-        pols = {p.id: p for p in session.query(Politician).all()}
-        companies = {c.ticker: c for c in session.query(Company).all()}
-
-        trade_dicts = []
-        for t in trades:
-            pol = pols.get(t.politician_id)
-            trade_dicts.append({
-                "id": t.id,
-                "politician_id": t.politician_id,
-                "politician_name": pol.name if pol else "",
-                "ticker": t.ticker,
-                "trade_date": str(t.trade_date) if t.trade_date else None,
-                "filing_date": str(t.filing_date) if t.filing_date else None,
-                "transaction_type": t.transaction_type,
-                "value_max": t.value_max or 0,
-                "asset_type": t.asset_type or "stock",
-                "owner": t.owner or "",
-            })
-
-        committee_map = {
-            pid: [c.strip() for c in (p.committees or "").split(",") if c.strip()]
-            for pid, p in pols.items()
-            if p.committees
-        }
-        from congress_quant_tracker.enrichers.sectors import resolve_sector, scorer_sector
-
-        sector_map: dict[str, str] = {}
-        for tkr, c in companies.items():
-            if c.sector:
-                sector_map[tkr] = scorer_sector(c.sector)
-        for t in trades:
-            label = resolve_sector(t.ticker, t.sector, sector_map.get(t.ticker or ""))
-            if label and t.ticker:
-                sector_map[t.ticker] = scorer_sector(label)
-
-        scored = self.scorer.score_batch(trade_dicts, committee_map, sector_map)
-        by_id = {s["id"]: s for s in scored}
-
-        for t in trades:
-            s = by_id.get(t.id)
-            if not s:
-                continue
-            t.score = s.get("score", 0)
-            t.tag = s.get("tag", "routine")
-            t.reason = s.get("reason", "")
-            stats["trades_scored"] = stats.get("trades_scored", 0) + 1
-
-        session.commit()
+            trades = session.query(Trade).filter(Trade.tag.is_(None)).all()
+        score_trades(session, trades, stats)
 
     def fix_bad_dates(self) -> dict:
         """Sanitize trade dates that look like option expirations / parse errors."""
@@ -377,14 +310,7 @@ class DataUpdateService:
 
     def _update_politician_stats(self, session: Session) -> None:
         """Update aggregate stats for all politicians."""
-        politicians = session.query(Politician).all()
-        for pol in politicians:
-            trades = session.query(Trade).filter(Trade.politician_id == pol.id).all()
-            pol.total_trades = len(trades)
-            if trades:
-                scores = [t.score for t in trades if t.score > 0]
-                pol.avg_score = sum(scores) / len(scores) if scores else 0
-        session.commit()
+        refresh_politician_stats(session)
 
     def run_incremental_update(self) -> dict:
         """Run an update for recent filings only."""

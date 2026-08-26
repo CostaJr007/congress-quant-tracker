@@ -18,22 +18,13 @@ from typing import Any, Optional
 import httpx
 import pdfplumber
 
+from congress_quant_tracker.common import normalize_transaction_type
 from congress_quant_tracker.config import settings
 
 logger = logging.getLogger(__name__)
 
 # Owner codes on House PTRs
 OWNER_CODES = {"SP", "DC", "JT", "C", "Self", "self"}
-
-TX_MAP = {
-    "P": "buy",
-    "S": "sell",
-    "S (partial)": "sell",
-    "S (full)": "sell",
-    "E": "exchange",
-    "Purchase": "buy",
-    "Sale": "sell",
-}
 
 
 def _parse_date(s: str) -> Optional[date]:
@@ -82,18 +73,7 @@ def extract_member_name(text: str, fallback: str = "") -> str:
 
 
 def _normalize_tx(tx_raw: str) -> str:
-    tx_raw = re.sub(r"\s+", " ", (tx_raw or "").strip())
-    low = tx_raw.lower()
-    if "partial" in low or "full" in low or low.startswith("s"):
-        if low.startswith("p") and "partial" not in low and "sale" not in low:
-            return "buy"
-        if low.startswith("s") or "sale" in low or "partial" in low or "full" in low:
-            return "sell"
-    if low in ("p", "purchase", "buy"):
-        return "buy"
-    if low in ("e", "exchange"):
-        return "exchange"
-    return TX_MAP.get(tx_raw[0].upper() if tx_raw else "P", "buy")
+    return normalize_transaction_type(tx_raw)
 
 
 def parse_trades_regex(text: str, filing_meta: Optional[dict] = None) -> list[dict]:
@@ -203,6 +183,61 @@ def parse_trades_regex(text: str, filing_meta: Optional[dict] = None) -> list[di
     return trades
 
 
+def _coerce_groq_trade(t: dict) -> Optional[dict]:
+    """Strictly validate/coerce one LLM-extracted trade.
+
+    LLM output is never trusted: every field is re-parsed, bounded and typed
+    before it can reach the database. Returns None for unusable rows.
+    """
+    ticker = str(t.get("ticker") or "").upper().strip()
+    if not re.fullmatch(r"[A-Z]{1,6}(?:\.[A-Z])?", ticker):
+        return None
+
+    def _int(v) -> int:
+        try:
+            n = int(float(str(v).replace(",", "").strip()))
+            return n if n >= 0 else 0
+        except (ValueError, TypeError):
+            return 0
+
+    value_min = _int(t.get("value_min"))
+    value_max = _int(t.get("value_max"))
+    if value_max and value_min > value_max:
+        value_min, value_max = value_max, value_min
+
+    trade_date = _parse_date(str(t.get("trade_date") or ""))
+    if not trade_date:
+        return None
+    filing_date = _parse_date(str(t.get("filing_date") or ""))
+
+    asset_type = str(t.get("asset_type") or "stock").lower()
+    if asset_type not in (
+        "stock",
+        "etf",
+        "option_call",
+        "option_put",
+        "crypto",
+        "bond",
+    ):
+        asset_type = "stock"
+
+    owner = str(t.get("owner") or "").strip().upper()[:10] or ""
+
+    return {
+        "ticker": ticker,
+        "asset_name": re.sub(r"\s+", " ", str(t.get("asset_name") or ticker)).strip()[:255],
+        "asset_type": asset_type,
+        "transaction_type": _normalize_tx(t.get("transaction_type") or "buy"),
+        "trade_date": trade_date.isoformat(),
+        "filing_date": filing_date.isoformat() if filing_date else None,
+        "value_min": value_min,
+        "value_max": value_max,
+        "value_range": re.sub(r"\s+", " ", str(t.get("value_range") or "")).strip()[:50],
+        "owner": owner if owner in OWNER_CODES else "",
+        "source": "house_ptr_groq",
+    }
+
+
 def parse_with_groq(text: str, filing_meta: Optional[dict] = None) -> list[dict]:
     """Use Groq (OpenAI-compatible) to extract trades as JSON."""
     api_key = (settings.GROQ_API_KEY or "").strip()
@@ -270,18 +305,12 @@ TEXT:
                 for t in trades:
                     if not isinstance(t, dict):
                         continue
-                    ticker = (t.get("ticker") or "").upper().strip()
-                    if not ticker:
-                        continue
-                    t["ticker"] = ticker
-                    t["source"] = "house_ptr_groq"
-                    tt = (t.get("transaction_type") or "buy").lower()
-                    if tt in ("purchase", "p"):
-                        tt = "buy"
-                    elif tt in ("sale", "s", "sale_partial", "sale_full"):
-                        tt = "sell"
-                    t["transaction_type"] = tt
-                    out.append(t)
+                    coerced = _coerce_groq_trade(t)
+                    if coerced:
+                        out.append(coerced)
+                dropped = len(trades) - len(out)
+                if dropped:
+                    logger.warning("Groq: dropped %d invalid trade row(s)", dropped)
                 return out
         except Exception as e:
             last_err = e
