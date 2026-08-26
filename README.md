@@ -217,8 +217,7 @@ congress-quant-tracker/
 │   └── agent/                     # CI://COPILOT
 ├── ci_terminal/                   # CI://TERMINAL static desk
 ├── web_fused/                     # Next.js UI
-├── scripts/                       # update, enrich, rescore
-├── dashboard/                     # optional Streamlit
+├── scripts/                       # update, enrich, rescore, purge
 ├── tests/                         # pytest (unit + API via TestClient)
 ├── pyproject.toml
 └── README.md

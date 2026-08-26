@@ -50,9 +50,6 @@ package-lock.json
 Thumbs.db
 Desktop.ini
 
-# Streamlit secrets
-.streamlit/secrets.toml
-
 # Scrapes / clones / junk
 disclose_clone/
 # Accidental Windows drive-letter dump (not dashboard/ or data/)

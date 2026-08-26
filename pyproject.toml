@@ -4,7 +4,6 @@ version = "2.1.0"
 description = "Congressional Trading Intelligence — Track every House & Senate trade with suspicion scoring"
 requires-python = ">=3.12"
 dependencies = [
-    "streamlit>=1.32.0",
     "sqlalchemy>=2.0.27",
     "pdfplumber>=0.10.3",
     "anthropic>=0.34.0",
