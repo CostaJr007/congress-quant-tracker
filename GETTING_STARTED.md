@@ -3,8 +3,14 @@
 ## 1. Environment
 
 ```bash
+# Install Python dependencies (uv or pip)
 uv sync
+# Or: pip install -e .
+
+# Install frontend dependencies
 cd web_fused && npm install && cd ..
+
+# Setup environment variables
 copy .env.example .env   # fill keys if you need Copilot / Tavily / Discord
 ```
 
@@ -17,11 +23,11 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 ## 2. Run
 
 ```bash
-# Shell A
+# Shell A: Start API
 set MARKET_DATA_ENABLED=1
-uv run python server/api_server.py
+python server/api_server.py
 
-# Shell B
+# Shell B: Start Next.js Web UI
 cd web_fused
 npm run dev -- -p 3000
 ```
@@ -43,10 +49,10 @@ To refresh: `scripts/update_official.py` and `scripts/update_senate.py`.
 Fill sectors, photo URLs, options rows, and rescore (fast, no yfinance):
 
 ```bash
-uv run python scripts/enrich_all.py
+python scripts/enrich_all.py
 ```
 
-## 4. Terminal — first use
+## 4. Terminal — First use
 
 1. Open `/terminal/`
 2. If an old layout hides **RETURNS**, click **RESET**

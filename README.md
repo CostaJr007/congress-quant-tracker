@@ -5,7 +5,7 @@
 Track House and Senate periodic transaction reports (PTRs), score them, estimate post-trade performance with **yfinance**, and explore the book in a Next.js app plus **CI://TERMINAL** — a dense Bloomberg-style ASCII desk (no Bloomberg marks or logos).
 
 Product name: **CongressInvests** / **CI**.  
-Public repository. Do not commit `.env`, API keys, or the SQLite database.
+Open-source repository. Do not commit `.env`, API keys, or the SQLite database.
 
 ---
 
@@ -25,15 +25,15 @@ Public repository. Do not commit `.env`, API keys, or the SQLite database.
 ## Architecture
 
 ```
-┌─────────────────────┐     ┌──────────────────────────┐
-│  web_fused (Next.js)│────▶│  FastAPI :8000           │
-│  :3000              │     │  SQLite + pipelines      │
-└─────────────────────┘     │  yfinance market data    │
-                            │  /terminal/  (static)    │
-┌─────────────────────┐     │  /politicians/*.jpg      │
-│  CI://TERMINAL      │────▶│  /api/terminal/*         │
-│  ci_terminal/       │     └──────────────────────────┘
-└─────────────────────┘
+┌───────────────────────┐          ┌───────────────────────────┐
+│  web_fused (Next.js)  ├─────────►│  FastAPI :8000            │
+│  :3000                │          │  SQLite + pipelines       │
+└───────────────────────┘          │  yfinance market data     │
+                                   │  /terminal/  (static)     │
+┌───────────────────────┐          │  /politicians/*.jpg       │
+│  CI://TERMINAL        ├─────────►│  /api/terminal/*          │
+│  ci_terminal/         │          └───────────────────────────┘
+└───────────────────────┘
 ```
 
 | Component | Path | Port |
@@ -50,7 +50,7 @@ Public repository. Do not commit `.env`, API keys, or the SQLite database.
 
 ### Prerequisites
 
-- Python **3.12+** and [uv](https://github.com/astral-sh/uv)
+- Python **3.12+** and [uv](https://github.com/astral-sh/uv) (or standard `pip`)
 - Node.js **20+** (for `web_fused`)
 - Windows / macOS / Linux
 
@@ -59,7 +59,14 @@ Public repository. Do not commit `.env`, API keys, or the SQLite database.
 ```bash
 git clone https://github.com/CostaJr007/congress-quant-tracker.git
 cd congress-quant-tracker
+
+# Using uv (recommended):
 uv sync
+
+# Or using standard pip:
+pip install -e .
+
+# Install frontend dependencies:
 cd web_fused && npm install && cd ..
 ```
 
@@ -85,15 +92,19 @@ copy .env.example .env   # Windows
 
 ### 3. Run API + UI
 
-Windows shortcut: `run_ui.bat` (API + Next.js + terminal).  
-Terminal only: `start.bat`.
+Windows shortcuts:
+- `run_ui.bat` (API + Next.js + terminal)
+- `start.bat` (API + terminal only)
+
+Manual launch:
 
 ```bash
-# API (market data ON)
+# Terminal 1: API (market data ON)
 set MARKET_DATA_ENABLED=1
-uv run python server/api_server.py
+python server/api_server.py
+# (or with uv: uv run python server/api_server.py)
 
-# another shell — Next.js
+# Terminal 2: Next.js Web UI
 cd web_fused
 echo NEXT_PUBLIC_API_URL=http://localhost:8000 > .env.local
 npm run dev -- -p 3000
@@ -103,16 +114,17 @@ npm run dev -- -p 3000
 |-----|-----|
 | http://localhost:3000 | CongressInvests UI |
 | http://localhost:8000/terminal/ | CI://TERMINAL |
-| http://localhost:8000/docs | OpenAPI |
+| http://localhost:8000/docs | OpenAPI / Swagger Docs |
 
 ### 4. Data pipelines
 
 ```bash
-uv run python scripts/update_official.py   # House Clerk
-uv run python scripts/update_senate.py     # Senate (direct, then proxy)
-uv run python scripts/enrich_all.py        # sectors + photos + options + rescore
-uv run python scripts/rescore.py           # rescore only
+python scripts/update_official.py   # House Clerk
+python scripts/update_senate.py     # Senate (direct, then proxy)
+python scripts/enrich_all.py        # sectors + photos + options + rescore
+python scripts/rescore.py           # rescore only
 ```
+*(You can also prefix commands with `uv run` if uv is installed).*
 
 HTTP equivalents live under `POST /api/pipeline/*`.
 
@@ -144,11 +156,11 @@ Monospace black canvas, orange bars. Brand is **CI://TERMINAL**.
 | Widget | Role |
 |--------|------|
 | **MEMBERS · BY MONTH** | Browse by filed/traded month; photo cards; collapse heavy filers |
-| **RETURNS LEADERBOARD** | Rank by Δ% / ADJ% (BUY:+Δ, SELL:−Δ) and estimated PnL$ |
+| **RETURNS LEADERBOARD** | Rank by Δ% / ADJ% (BUY: +Δ%, SELL: −Δ%) and estimated PnL$ |
 | **FOCUSED ASSET** | Daily candles (or line) + TX marker on the trade date |
 | **ASSET HOLDERS** | Who else traded the same ticker |
 | **POLITICIAN BOOK** | Member tickers + TX/FILED dates |
-| **SECTOR DESK** | House × Senate overlap by sector |
+| **SECTOR DESK** | House & Senate overlap by sector |
 | **CI://COPILOT** | F2 — English-only desk analyst |
 
 Presets: `CGS` (default) · `GLB` · `EQ` · `MET` · `NWS`  
@@ -160,7 +172,7 @@ First load: if an old layout hides **RETURNS**, click **RESET**.
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/terminal/dataset?dataset=tape\|stocks\|…` | yfinance market payloads |
+| `GET /api/terminal/dataset?dataset=tape\|stocks\|...` | yfinance market payloads |
 | `GET /api/terminal/congress/wire` | Disclosures (month, chamber, party, side, q) |
 | `GET /api/terminal/congress/months` | Months with trades |
 | `GET /api/terminal/congress/holders/{ticker}` | Co-holders |
@@ -178,8 +190,8 @@ LIVE config: `ci_terminal/js/live.config.js` (same-origin).
 
 - Disclosures use **value ranges**, not exact shares → shares/PnL are **midpoint estimates**.
 - `change_pct` = asset move since trade date (yfinance, `auto_adjust`).
-- `return_side_adj` = BUY:+Δ% / SELL:−Δ% (side-adjusted outcome).
-- Metals on the tape use Yahoo futures (`GC=F`, …) as spot proxies.
+- `return_side_adj` = BUY: +Δ% / SELL: −Δ% (side-adjusted outcome).
+- Metals on the tape use Yahoo futures (`GC=F`, etc.) as spot proxies.
 - News wire is DEMO unless a live RSS feed succeeds. Do not invent live headlines.
 
 See `ci_terminal/DATA_DEFINITIONS.md` and `ci_terminal/README.md`.
@@ -232,26 +244,20 @@ Do **not** commit: `.env`, `*.db`, `data/`, API keys, proxies with credentials.
 
 Photos are served from `data/politicians/` at `/politicians/{bioguide}.jpg`.
 
-Keep the repo **private** if it holds operational data.
-
-```bash
-gh repo edit CostaJr007/congress-quant-tracker --visibility private
-```
-
 ---
 
 ## Useful commands
 
 | Command | Action |
 |---------|--------|
-| `uv run python server/api_server.py` | API :8000 + `/terminal/` |
+| `python server/api_server.py` | API :8000 + `/terminal/` |
 | `start.bat` | API + open terminal |
 | `run_ui.bat` | API + web UI + terminal |
 | `cd web_fused && npm run dev` | UI :3000 |
-| `uv run python scripts/update_official.py` | House |
-| `uv run python scripts/update_senate.py` | Senate |
-| `uv run python scripts/enrich_all.py` | Sectors + photos + options + rescore |
-| `uv run pytest` | Unit tests + API tests (temp SQLite, no network) |
+| `python scripts/update_official.py` | House |
+| `python scripts/update_senate.py` | Senate |
+| `python scripts/enrich_all.py` | Sectors + photos + options + rescore |
+| `python -m pytest` | Unit tests + API tests (temp SQLite, no network) |
 
 ---
 
