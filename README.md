@@ -5,7 +5,7 @@
 Track House and Senate periodic transaction reports (PTRs), score them, estimate post-trade performance with **yfinance**, and explore the book in a Next.js app plus **CI://TERMINAL** — a dense Bloomberg-style ASCII desk (no Bloomberg marks or logos).
 
 Product name: **CongressInvests** / **CI**.  
-Private repository. Do not commit `.env`, API keys, or the SQLite database.
+Public repository. Do not commit `.env`, API keys, or the SQLite database.
 
 ---
 
