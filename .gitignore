@@ -72,7 +72,8 @@ run_*clone*.bat
 
 # Large legacy frontend deps live under web/node_modules (ignored above)
 web/.next/
-# Photos live only under web_fused (avoid duplicating ~48MB from legacy web/)
+# Politician photos are downloaded artifacts (scripts mirror them from data/)
+web_fused/public/politicians/
 web/public/politicians/
 
 # uv
