@@ -27,6 +27,24 @@ WEB_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
 YAML_PATH = ROOT / "data" / "legislators-current.yaml"
 HIST_YAML_PATH = ROOT / "data" / "legislators-historical.yaml"
 
+LEGISLATORS_BASE_URL = "https://raw.githubusercontent.com/unitedstates/congress-legislators/main"
+
+
+def ensure_yaml(path: Path, url: str) -> None:
+    """Download a legislators YAML file on first run (data/ is not versioned)."""
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        urllib.request.urlretrieve(url, str(path))
+        print(f"Downloaded {path.name}")
+    except Exception as e:
+        print(f"Warning downloading {path.name}: {e}")
+
+
+ensure_yaml(YAML_PATH, f"{LEGISLATORS_BASE_URL}/legislators-current.yaml")
+ensure_yaml(HIST_YAML_PATH, f"{LEGISLATORS_BASE_URL}/legislators-historical.yaml")
+
 
 def normalize_clean_name(raw: str) -> str:
     """Strip prefixes, titles, suffixes, and punctuation for fuzzy matching."""
