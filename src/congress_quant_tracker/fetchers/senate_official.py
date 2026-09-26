@@ -117,7 +117,13 @@ def probe_efd_access(timeout: float = 20.0, proxy: str | None = None) -> dict[st
 
 
 async def fetch_senate_via_congressinvests(max_pages: int = 30) -> list[dict]:
-    """Fetch senate trades from the free CongressInvests API."""
+    """Fetch senate trades from the free CongressInvests API.
+
+    Per-page retry: a transient 429/5xx on one page must not truncate
+    history — we retry then continue with partial results.
+    """
+    import asyncio
+
     from congress_quant_tracker.fetchers.congress_invests import (
         fetch_trades,
         _load_members_db,
@@ -129,7 +135,18 @@ async def fetch_senate_via_congressinvests(max_pages: int = 30) -> list[dict]:
     all_trades: list[dict] = []
     offset = 0
     for _ in range(max_pages):
-        batch = await fetch_trades(chamber="senate", limit=200, offset=offset)
+        batch = None
+        for attempt in range(3):
+            try:
+                batch = await fetch_trades(chamber="senate", limit=200, offset=offset)
+                break
+            except Exception as e:
+                logger.warning(
+                    "CongressInvests senate @offset %s attempt %s/3: %s",
+                    offset, attempt + 1, e,
+                )
+                if attempt < 2:
+                    await asyncio.sleep(3 * (attempt + 1))
         if not batch:
             break
         for t in batch:

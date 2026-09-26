@@ -27,17 +27,33 @@ from congress_quant_tracker.services.senate_pipeline import SenatePipeline
 
 
 def run_update() -> dict:
-    """Execute the standard daily pipeline: House -> Senate -> enrich."""
+    """Execute the standard daily pipeline: House -> Senate -> enrich.
+
+    Each stage is isolated: a Senate outage (Akamai 403, API down) must
+    never wipe out a successful House run.
+    """
+    import traceback
+
     print("\n" + "=" * 60)
     print("CongressQuantTracker - Daily Update")
     print(f"Started at: {__import__('datetime').datetime.now()}")
     print("=" * 60 + "\n")
 
-    house = OfficialHousePipeline().run(max_filings=80, since_days=150)
-    print("House done:", {k: house[k] for k in ("filings_indexed", "filings_selected", "trades_added", "trades_scored")})
+    try:
+        house = OfficialHousePipeline().run(max_filings=80, since_days=150)
+    except Exception as e:
+        print(f"[Daily] House FAILED: {e}")
+        traceback.print_exc()
+        house = {"trades_added": 0, "pdfs_parsed": 0, "errors": 1, "fatal": str(e)[:300]}
+    print("House done:", {k: house.get(k) for k in ("filings_indexed", "filings_selected", "trades_added", "trades_scored")})
 
-    senate = SenatePipeline().run(strategy="auto")
-    print("Senate done:", {k: senate[k] for k in ("strategy_used", "trades_fetched", "trades_added", "trades_scored")})
+    try:
+        senate = SenatePipeline().run(strategy="auto")
+    except Exception as e:
+        print(f"[Daily] Senate FAILED: {e}")
+        traceback.print_exc()
+        senate = {"trades_added": 0, "trades_fetched": 0, "strategy_used": "failed", "errors": 1, "fatal": str(e)[:300]}
+    print("Senate done:", {k: senate.get(k) for k in ("strategy_used", "trades_fetched", "trades_added", "trades_scored")})
 
     session = get_session(get_engine(settings.DATABASE_URL))
     try:

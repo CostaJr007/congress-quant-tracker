@@ -93,6 +93,17 @@ class SenatePipeline:
                 print(f"[Senate] auto -> {use}")
 
             if use == "efd":
+                # Fast-fail hint when Akamai blocks and no proxy can help — avoids
+                # launching a browser that takes 60s+ to hit the same 403.
+                if (
+                    probe.get("blocked_by_akamai")
+                    and not settings.HTTP_PROXY
+                    and strategy == "efd"
+                ):
+                    logger.warning(
+                        "eFD blocked by Akamai and no HTTP_PROXY set; "
+                        "try --strategy congressinvests or set HTTP_PROXY to a residential exit IP"
+                    )
                 try:
                     # Prefer lightweight HTTP session (proxy-friendly)
                     from congress_quant_tracker.fetchers.senate_efd_http import SenateEfdHttpClient
@@ -116,9 +127,9 @@ class SenatePipeline:
                                 with session.begin_nested():
                                     _, created = self._ensure_senator(session, rname)
                                     if created:
-                                        stats["politicians_added"] += 1
+                                        stats["politicians_added"] = stats.get("politicians_added", 0) + 1
                             except Exception as e:
-                                stats["errors"] += 1
+                                stats["errors"] = stats.get("errors", 0) + 1
                                 logger.debug("Senator register fail %s: %s", rname, e)
                         session.commit()
                         for rep in index_reports[:max_efd_reports]:
@@ -129,7 +140,7 @@ class SenatePipeline:
                                 parsed = parse_senate_ptr_html(html, rep)
                                 trades.extend(parsed)
                             except Exception as e:
-                                stats["errors"] += 1
+                                stats["errors"] = stats.get("errors", 0) + 1
                                 logger.warning("PTR parse fail %s: %s", rep.get("url"), e)
                     stats["strategy_used"] = "efd_http"
                 except Exception as e:
@@ -147,9 +158,9 @@ class SenatePipeline:
                                 with session.begin_nested():
                                     _, created = self._ensure_senator(session, rname)
                                     if created:
-                                        stats["politicians_added"] += 1
+                                        stats["politicians_added"] = stats.get("politicians_added", 0) + 1
                             except Exception as e:
-                                stats["errors"] += 1
+                                stats["errors"] = stats.get("errors", 0) + 1
                                 logger.debug("Senator register fail %s: %s", rname, e)
                         session.commit()
                         for rep in index_reports[:max_efd_reports]:
@@ -160,17 +171,29 @@ class SenatePipeline:
                                 parsed = parse_senate_ptr_html(html, rep)
                                 trades.extend(parsed)
                             except Exception as e2:
-                                stats["errors"] += 1
+                                stats["errors"] = stats.get("errors", 0) + 1
                                 logger.warning("PTR parse fail %s: %s", rep.get("url"), e2)
                         stats["strategy_used"] = "efd_playwright"
                     except Exception as e2:
                         print(f"[Senate] eFD failed ({e2}); falling back to CongressInvests")
-                        trades = fetch_senate_via_congressinvests_sync(max_pages=max_pages)
+                        try:
+                            trades = fetch_senate_via_congressinvests_sync(max_pages=max_pages)
+                        except Exception as e3:
+                            logger.warning("CongressInvests fallback also failed: %s", e3)
+                            trades = []
+                            stats["errors"] = stats.get("errors", 0) + 1
+                            stats["fallback_error"] = str(e3)[:300]
                         stats["strategy_used"] = "congressinvests_fallback"
-                        stats["errors"] += 1
+                        stats["errors"] = stats.get("errors", 0) + 1
                         stats["efd_error"] = str(e2)[:300]
             else:
-                trades = fetch_senate_via_congressinvests_sync(max_pages=max_pages)
+                try:
+                    trades = fetch_senate_via_congressinvests_sync(max_pages=max_pages)
+                except Exception as e:
+                    logger.warning("CongressInvests fetch failed: %s", e)
+                    trades = []
+                    stats["errors"] = stats.get("errors", 0) + 1
+                    stats["fallback_error"] = str(e)[:300]
                 stats["strategy_used"] = "congressinvests"
 
             stats["trades_fetched"] = len(trades)

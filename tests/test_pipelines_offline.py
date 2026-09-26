@@ -149,3 +149,83 @@ def test_terminal_market_quote_and_state():
     assert _quote_from_bars([]) is None
     assert _market_state("America/New_York") in (
         "OPEN", "CLOSED", "PRE", "UNKNOWN")
+
+
+def test_senate_auto_skips_efd_when_blocked(monkeypatch, tmp_path):
+    """Akamai 403 -> auto goes straight to CongressInvests, no browser."""
+    from congress_quant_tracker.services.senate_pipeline import SenatePipeline
+
+    db_url = f"sqlite:///{(tmp_path / 'sen.db').as_posix()}"
+    monkeypatch.setattr(settings, "DATABASE_URL", db_url)
+
+    monkeypatch.setattr(
+        "congress_quant_tracker.services.senate_pipeline.probe_efd_access",
+        lambda *a, **k: {"reachable": False, "blocked_by_akamai": True, "status_code": 403},
+    )
+    fake = [{
+        "politician_name": "Jane Senate", "ticker": "MSFT",
+        "transaction_type": "sell", "trade_date": date(2026, 6, 15),
+        "filing_date": date(2026, 7, 1), "value_min": 1, "value_max": 2,
+    }]
+    monkeypatch.setattr(
+        "congress_quant_tracker.services.senate_pipeline.fetch_senate_via_congressinvests_sync",
+        lambda *a, **k: fake,
+    )
+    stats = SenatePipeline().run(strategy="auto", max_pages=1)
+    assert stats["strategy_used"] == "congressinvests"
+    assert stats["trades_added"] == 1
+    assert stats["trades_fetched"] == 1
+
+
+def test_senate_congressinvests_outage_does_not_crash(monkeypatch, tmp_path):
+    """Total API outage -> run completes with 0 added and error counted."""
+    from congress_quant_tracker.services.senate_pipeline import SenatePipeline
+
+    db_url = f"sqlite:///{(tmp_path / 'sen2.db').as_posix()}"
+    monkeypatch.setattr(settings, "DATABASE_URL", db_url)
+    monkeypatch.setattr(
+        "congress_quant_tracker.services.senate_pipeline.probe_efd_access",
+        lambda *a, **k: {"reachable": False, "blocked_by_akamai": True},
+    )
+
+    def _boom(*a, **k):
+        raise RuntimeError("API down")
+
+    monkeypatch.setattr(
+        "congress_quant_tracker.services.senate_pipeline.fetch_senate_via_congressinvests_sync",
+        _boom,
+    )
+    stats = SenatePipeline().run(strategy="congressinvests", max_pages=1)
+    assert stats["strategy_used"] == "congressinvests"
+    assert stats["trades_added"] == 0
+    assert stats.get("errors", 0) >= 1
+
+
+def test_fetch_senate_retries_page_then_continues(monkeypatch):
+    """Transient 429 on page 1 -> retry succeeds; empty page 2 stops."""
+    import asyncio
+
+    import congress_quant_tracker.fetchers.senate_official as sen
+    import congress_quant_tracker.fetchers.congress_invests as ci
+
+    calls = {"n": 0}
+    good = {
+        "member": "Jane Senate", "trade_type": "S", "ticker": "MSFT",
+        "asset": "Microsoft", "tx_date": "2026-06-15", "disclosed": "2026-07-01",
+        "amount": "$1-$2", "link": "", "owner": "", "chamber": "senate",
+    }
+
+    async def fake_fetch_trades(chamber="senate", limit=200, offset=0):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("429 throttled")
+        if offset == 0:
+            return [good]
+        return []
+
+    monkeypatch.setattr(ci, "fetch_trades", fake_fetch_trades)
+    monkeypatch.setattr(ci, "_load_members_db", lambda: {})
+    trades = asyncio.run(sen.fetch_senate_via_congressinvests(max_pages=2))
+    assert len(trades) == 1
+    assert trades[0]["ticker"] == "MSFT"
+    assert calls["n"] >= 2
