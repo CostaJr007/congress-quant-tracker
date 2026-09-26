@@ -189,7 +189,7 @@ class DataUpdateService:
             )
             session.add(politician)
             session.flush()
-            stats["politicians_added"] += 1
+            stats["politicians_added"] = stats.get("politicians_added", 0) + 1
         else:
             # Backfill party/state when we previously defaulted to Independent
             party = trade_data.get("party")
@@ -204,7 +204,7 @@ class DataUpdateService:
         inner: dict = {}
         status = store_trade(session, rec, politician, inner)
         if status == "added":
-            stats["trades_added"] += 1
+            stats["trades_added"] = stats.get("trades_added", 0) + 1
             if str(rec["asset_type"]).startswith("option"):
                 stats["options_added"] = stats.get("options_added", 0) + 1
         elif status == "merged":

@@ -274,7 +274,7 @@ class SenatePipeline:
         name = rec["politician_name"]
         pol, created = self._ensure_senator(session, name)
         if created:
-            stats["politicians_added"] += 1
+            stats["politicians_added"] = stats.get("politicians_added", 0) + 1
 
         status = store_trade(session, rec, pol)
         if status == "merged":

@@ -291,6 +291,44 @@ def _download_history(tickers: list[str], days: int = 100) -> dict[str, list[dic
         except Exception as e:
             logger.debug("fallback history %s: %s", t, e)
 
+    # Second fallback chain: Yahoo direct HTTP -> Stooq (no key).
+    # Only for tickers still empty after yfinance legs.
+    still_empty = [t for t in tickers if not out.get(t)]
+    if still_empty:
+        try:
+            from congress_quant_tracker.config import settings as _settings
+
+            if getattr(_settings, "MARKET_DATA_FALLBACK", True) is False:
+                raise RuntimeError("fallback disabled")
+            from congress_quant_tracker.enrichers.market_providers import (
+                fetch_history_with_fallback,
+            )
+            for t in still_empty:
+                try:
+                    bars, source = fetch_history_with_fallback(
+                        t, start.date() if hasattr(start, "date") else start,
+                        end.date() if hasattr(end, "date") else end,
+                        yf_fetcher=None,
+                    )
+                    if bars:
+                        # normalize provider bars to terminal shape
+                        out[t] = [
+                            {
+                                "date": b["date"],
+                                "open": b.get("open"),
+                                "high": b.get("high"),
+                                "low": b.get("low"),
+                                "close": b["close"],
+                                "volume": b.get("volume"),
+                            }
+                            for b in bars
+                        ]
+                        logger.info("terminal fallback %s -> %s (%d bars)", t, source, len(bars))
+                except Exception as e:
+                    logger.debug("provider fallback %s: %s", t, e)
+        except Exception as e:
+            logger.debug("provider fallback batch: %s", e)
+
     _cache_set(key, out)
     return out
 

@@ -49,6 +49,8 @@ class Settings:
     NO_YF: bool = os.getenv("NO_YF", "0") == "1"
     # Market prices / charts (can stay on even if NO_YF=1 for scorer)
     MARKET_DATA_ENABLED: bool = os.getenv("MARKET_DATA_ENABLED", "1") == "1"
+    # Fallback chain when yfinance is throttled: Yahoo Chart v8 direct -> Stooq CSV
+    MARKET_DATA_FALLBACK: bool = os.getenv("MARKET_DATA_FALLBACK", "1") == "1"
     # When true, always call Groq even if regex already found trades
     LLM_ENABLED: bool = os.getenv("LLM_ENABLED", "0") == "1"
 

@@ -93,8 +93,8 @@ def _save_disk(ticker: str, data: dict) -> None:
         logger.debug("cache write fail %s: %s", ticker, e)
 
 
-def _fetch_history(ticker: str, start: date, end: date) -> list[dict]:
-    """Download daily bars; returns [{date, close, open, high, low, volume}, ...]."""
+def _fetch_yf_history(ticker: str, start: date, end: date) -> list[dict]:
+    """yfinance-only leg; returns [] on any failure (never raises)."""
     if not _enabled():
         return []
 
@@ -160,6 +160,43 @@ def _fetch_history(ticker: str, start: date, end: date) -> list[dict]:
         return rows
     except Exception as e:
         logger.warning("yfinance history failed %s: %s", ticker, e)
+        return []
+
+
+_last_source: dict[str, str] = {}
+
+
+def _fetch_history(ticker: str, start: date, end: date) -> list[dict]:
+    """Download daily bars with fallback chain.
+
+    1. yfinance (primary)
+    2. Yahoo Chart v8 direct HTTP
+    3. Stooq CSV (no key)
+
+    Returns [{date, close, open, high, low, volume}, ...] or [].
+    The effective provider is tracked via _last_source for trade_performance.
+    """
+    bars = _fetch_yf_history(ticker, start, end)
+    if bars:
+        _last_source[ticker.upper().strip()] = "yfinance"
+        return bars
+    if not _enabled():
+        return []
+    try:
+        from congress_quant_tracker.config import settings as _settings
+
+        if getattr(_settings, "MARKET_DATA_FALLBACK", True) is False:
+            return []
+        from congress_quant_tracker.enrichers.market_providers import (
+            fetch_history_with_fallback,
+        )
+        bars, source = fetch_history_with_fallback(ticker, start, end, yf_fetcher=None)
+        if bars:
+            _last_source[ticker.upper().strip()] = source
+            logger.info("market fallback used %s -> %s (%d bars)", ticker, source, len(bars))
+        return bars
+    except Exception as e:
+        logger.debug("market fallback failed %s: %s", ticker, e)
         return []
 
 
@@ -405,7 +442,7 @@ def trade_performance(
             "pnl_mid_est": round(pnl, 2) if pnl is not None else None,
             "shares": shares,
             "chart": [{"date": b["date"], "close": b["close"]} for b in chart],
-            "source": "yfinance",
+            "source": _last_source.get(ticker.upper(), "yfinance"),
             "error": None,
         }
     except Exception as e:

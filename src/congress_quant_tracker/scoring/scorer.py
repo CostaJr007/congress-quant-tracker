@@ -124,10 +124,31 @@ class TradeScorer:
         return results
 
     def score_contrarian(self, ticker: str, trade_date, transaction_type: str) -> Tuple[int, str]:
-        if settings.NO_YF or yf is None or not ticker or "buy" not in transaction_type.lower():
+        if settings.NO_YF or not ticker or "buy" not in transaction_type.lower():
             return 0, ""
         tx_date = _parse_date(trade_date)
         if not tx_date: return 0, ""
+        # Preferred path: cached market_data (yfinance + Yahoo direct + Stooq fallbacks)
+        try:
+            from congress_quant_tracker.enrichers.market_data import get_history as _md_history
+            from datetime import date as _d
+
+            bars = _md_history(
+                ticker,
+                _d(tx_date.year, tx_date.month, tx_date.day) - timedelta(days=CONTRARIAN_LOOKBACK_DAYS),
+                _d(tx_date.year, tx_date.month, tx_date.day) - timedelta(days=1),
+            )
+            if bars and len(bars) >= 5:
+                p0, p1 = bars[0]["close"], bars[-1]["close"]
+                if p0:
+                    pct = ((p1 - p0) / p0) * 100
+                    if pct < CONTRARIAN_DROP_THRESHOLD:
+                        return POINTS_CONTRARIAN_BUY, f"Contrarian: {ticker} {pct:.1f}% (+{POINTS_CONTRARIAN_BUY})"
+                    return 0, ""
+        except Exception as e:
+            logger.debug("Contrarian market_data path failed for %s: %s", ticker, e)
+        if yf is None:
+            return 0, ""
         try:
             start = tx_date - timedelta(days=CONTRARIAN_LOOKBACK_DAYS)
             end = tx_date - timedelta(days=1)

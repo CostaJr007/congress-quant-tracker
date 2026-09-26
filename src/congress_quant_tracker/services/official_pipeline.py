@@ -351,7 +351,7 @@ class OfficialHousePipeline:
             session, rec["politician_name"], filing=filing, pol_info=pol_info
         )
         if created:
-            stats["politicians_added"] += 1
+            stats["politicians_added"] = stats.get("politicians_added", 0) + 1
 
         if pol.bioguide_id:
             try:
