@@ -9,13 +9,18 @@ Guarantees:
   * rejects demo/sample payloads (defense against seed-style contamination)
   * same-day/same-side duplicates are MERGED (widened ranges, backfilled
     fields), never silently dropped
+  * a disclosed trade is never dropped for lack of a ticker: the symbol is
+    resolved from the asset name when the DB knows the company, and otherwise
+    stored under a stable pseudo-symbol so the trade stays visible
   * every stored Trade carries provenance in `notes` (source tag [+ boost])
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
-from datetime import date, datetime
+import re
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -24,7 +29,12 @@ from congress_quant_tracker.common import (
     normalize_transaction_type,
     sanitize_ticker,
 )
-from congress_quant_tracker.database.models import OptionsTrade, Politician, Trade
+from congress_quant_tracker.database.models import (
+    Company,
+    OptionsTrade,
+    Politician,
+    Trade,
+)
 from congress_quant_tracker.enrichers.sectors import resolve_sector
 from congress_quant_tracker.fetchers.congress_invests import (
     classify_asset,
@@ -35,15 +45,48 @@ from congress_quant_tracker.fetchers.congress_invests import (
 
 logger = logging.getLogger(__name__)
 
-# Markers that identify generated/demo payloads. Real filings never contain them.
-_SAMPLE_MARKERS = ("sample trade", "sample_trade", "__seed__")
+# Markers that identify generated/demo payloads, which no real filing contains:
+# the seeder's "Sample trade for ..." text and the printed instruction row the
+# House PTR form itself carries ("Example Mega Corp Common Stock"). OCR of that
+# printed row reads cleanly, so it must be rejected by name.
+_SAMPLE_MARKERS = ("sample trade", "sample_trade", "__seed__", "example mega corp", "exmpl")
 
 _ASSET_TYPES = {"stock", "etf", "option_call", "option_put", "crypto", "bond", "other"}
 _OWNER_CODES = {"SP", "DC", "JT", "C"}
 
+# Trades whose asset has no market symbol (private companies, funds, bonds,
+# real estate) are stored under "XX" + a stable suffix. The prefix keeps them
+# out of market lookups: nothing here is a real exchange symbol.
+UNLISTED_PREFIX = "XX"
+UNLISTED_SUFFIX_CHARS = 4
+
+# Words that describe a security rather than the issuer, stripped before a name
+# is matched against the company directory.
+_NAME_NOISE = re.compile(
+    r"\b(inc|incorporated|corp|corporation|co|company|ltd|limited|plc|llc|lp|nv|sa|ag|"
+    r"common|stock|shares?|cl|class|series|cmn|com|adr|ads|depositary|"
+    r"the|and|of|new|fund|trust|etf|index|us|usa)\b",
+    re.I,
+)
+# Everything from one of these words on describes the security, not the issuer.
+_SECURITY_DESCRIPTORS = {
+    "class", "cl", "series", "common", "cmn", "com", "stock", "stocks", "share",
+    "shares", "depositary", "adr", "ads", "unit", "units", "warrant", "warrants",
+    "right", "rights", "note", "notes", "bond", "bonds", "debenture", "debentures",
+    "preferred", "pref", "pfd", "ordinary", "capital",
+}
+_LEGAL_TAIL = re.compile(
+    r"\s*[\(\[][A-Z][A-Z0-9.\-]{0,5}[\)\]]\s*(?:\[[A-Z]{2,3}\])?\s*$"
+)
+_DESCRIPTION_TAIL = re.compile(r"\s*(?:\(|\[)?(?:CALL|PUT|F S:|S O:|D:|L:)\b.*$", re.I)
+
 
 def looks_like_sample(raw: dict) -> bool:
-    """Heuristic guard against seeded/demo records reaching production."""
+    """Heuristic guard against seeded/demo records reaching production.
+
+    Covers both the old seeder's payloads and the example row printed on the
+    PTR form itself, which OCR reads as a clean, entirely fictitious trade.
+    """
     blob = " ".join(
         str(raw.get(k) or "")
         for k in (
@@ -81,11 +124,102 @@ def _clean_owner(owner: Any) -> str:
     return o[:10] if o else ""
 
 
-def normalize_record(raw: dict) -> tuple[dict | None, str | None]:
+def clean_company_name(asset_name: str) -> str:
+    """Issuer name from a PTR asset description.
+
+    "Zoetis Inc. Class A Common Stock (ZTS)" -> "Zoetis Inc."
+    """
+    name = str(asset_name or "").strip()
+    if not name:
+        return ""
+    name = _DESCRIPTION_TAIL.sub("", name)
+    name = _LEGAL_TAIL.sub("", name)
+    words = name.split()
+    for index, word in enumerate(words[1:], start=1):
+        if word.strip(".,").lower() in _SECURITY_DESCRIPTORS:
+            words = words[:index]
+            break
+    name = re.sub(r"\s+", " ", " ".join(words)).strip(" -,\t")
+    return name[:120]
+
+
+def _name_tokens(name: str) -> list[str]:
+    cleaned = _NAME_NOISE.sub(" ", clean_company_name(name).lower())
+    return [t for t in re.split(r"[^a-z0-9]+", cleaned) if len(t) >= 3]
+
+
+def synthetic_ticker(asset_name: str) -> str:
+    """Stable pseudo-symbol for an asset with no market ticker.
+
+    Derived from the name, so every disclosure of the same asset aggregates
+    under one symbol instead of scattering.
+    """
+    digest = hashlib.sha1(
+        " ".join(_name_tokens(asset_name) or [str(asset_name).lower()]).encode("utf-8")
+    ).hexdigest()
+    return UNLISTED_PREFIX + digest[:UNLISTED_SUFFIX_CHARS].upper()
+
+
+def is_synthetic_ticker(ticker: str | None) -> bool:
+    if not ticker:
+        return False
+    symbol = str(ticker).upper()
+    return symbol.startswith(UNLISTED_PREFIX) and len(symbol) == 2 + UNLISTED_SUFFIX_CHARS
+
+
+def resolve_ticker_from_name(asset_name: str, session: Session | None = None) -> str:
+    """Symbol for an asset name, from the company directory. "" when unknown.
+
+    Only unambiguous matches are accepted: a single company whose normalized
+    name starts with the asset's normalized name, or contains all of its
+    significant words. Filings often omit the ticker ("Zoetis Inc. Class A
+    Common Stock"), and guessing one is worse than none.
+    """
+    if session is None:
+        return ""
+    tokens = _name_tokens(asset_name)
+    if not tokens:
+        return ""
+    companies = session.query(Company.ticker, Company.name).all()
+    matches: list[str] = []
+    for ticker, company_name in companies:
+        if not company_name or company_name.upper() == (ticker or "").upper():
+            continue
+        normalized = _NAME_NOISE.sub(" ", str(company_name).lower())
+        words = {t for t in re.split(r"[^a-z0-9]+", normalized) if len(t) >= 3}
+        if not words:
+            continue
+        if tokens[0] in words and all(t in words for t in tokens[:2]):
+            matches.append(ticker)
+    unique = sorted(set(matches))
+    return unique[0] if len(unique) == 1 else ""
+
+
+def _ensure_company_name(session: Session, ticker: str, asset_name: str) -> None:
+    """Record the issuer name behind a ticker so name search works."""
+    name = clean_company_name(asset_name)
+    if not ticker or not name or name.upper() == ticker:
+        return
+    company = session.query(Company).filter(Company.ticker == ticker).first()
+    if company:
+        if not company.name or company.name.upper() == ticker.upper():
+            company.name = name
+        return
+    session.add(Company(ticker=ticker, name=name))
+
+
+def normalize_record(
+    raw: dict, *, session: Session | None = None
+) -> tuple[dict | None, str | None]:
     """Map any source shape to the canonical record.
 
     Accepts field aliases: member|politician|politician_name,
     amount_min/value_min, amount_max/value_max, link/pdf_url/url.
+
+    `session` (optional) lets an asset without a ticker be resolved against the
+    company directory. Without it — or when no company matches — the row is
+    stored under a stable pseudo-symbol rather than dropped, because the
+    disclosure itself is real data.
 
     Returns (record, None) on success or (None, reject_reason).
     """
@@ -103,15 +237,21 @@ def normalize_record(raw: dict) -> tuple[dict | None, str | None]:
     if not name:
         return None, "missing_politician"
 
+    asset_name = str(raw.get("asset_name") or raw.get("asset") or "").strip()[:255]
     ticker = sanitize_ticker(raw.get("ticker"))
+    unlisted = False
     if not ticker:
-        return None, "missing_or_bad_ticker"
+        ticker = resolve_ticker_from_name(asset_name, session)
+    if not ticker:
+        if not asset_name:
+            return None, "missing_or_bad_ticker"
+        ticker = synthetic_ticker(asset_name)
+        unlisted = True
 
     tx_type = normalize_transaction_type(
         raw.get("transaction_type") or raw.get("trade_type")
     )
 
-    asset_name = str(raw.get("asset_name") or raw.get("asset") or "").strip()[:255]
     asset_type = str(
         raw.get("asset_type") or classify_asset(asset_name, ticker) or "stock"
     ).strip().lower()
@@ -125,12 +265,20 @@ def normalize_record(raw: dict) -> tuple[dict | None, str | None]:
     )
     if not trade_date:
         return None, "missing_or_invalid_trade_date"
+    if trade_date > date.today() + timedelta(days=14):
+        # OCR-fabricated year ("2608") or an option expiration in the date
+        # slot: never store a trade from the future.
+        return None, "bad_date"
     if filing_date and filing_date < trade_date:
         filing_date = None  # never trust a filing earlier than the trade
+    if filing_date and filing_date > date.today() + timedelta(days=14):
+        filing_date = None  # future filing stamp is a parse error, not data
 
-    value_min = _to_int(raw.get("value_min", raw.get("amount_min")))
-    value_max = _to_int(raw.get("value_max", raw.get("amount_max")))
-    if value_max and value_min > value_max:
+    # 0 means "amount unknown" (no text amount, no checked column): store NULL
+    # so $0 never pollutes volume sums, sorting or the UI.
+    value_min = _to_int(raw.get("value_min", raw.get("amount_min"))) or None
+    value_max = _to_int(raw.get("value_max", raw.get("amount_max"))) or None
+    if value_min and value_max and value_min > value_max:
         value_min, value_max = value_max, value_min
     value_range = str(
         raw.get("value_range") or raw.get("amount_range") or ""
@@ -158,6 +306,8 @@ def normalize_record(raw: dict) -> tuple[dict | None, str | None]:
         "sector": str(raw.get("sector") or "").strip()[:100],
         "boost": boost,
         "source": source,
+        "unlisted": unlisted,
+        "company_name": clean_company_name(asset_name),
     }
     return record, None
 
@@ -201,6 +351,8 @@ def merge_into_existing(existing: Trade, rec: dict) -> bool:
 
 def _provenance_notes(rec: dict) -> str:
     tag = rec["source"] or "unknown"
+    if rec.get("unlisted"):
+        tag = f"{tag};unlisted"
     if rec["boost"]:
         return f"{tag};tavily_boost={rec['boost']}"
     return tag
@@ -231,6 +383,8 @@ def store_trade(
         if stats is not None:
             stats[status] = stats.get(status, 0) + 1
         return status
+
+    _ensure_company_name(session, rec["ticker"], rec["asset_name"])
 
     row = Trade(
         politician_id=pol.id,
@@ -286,9 +440,14 @@ def backfill_sector(session: Session, trade: Trade) -> None:
 
 
 __all__ = [
+    "UNLISTED_PREFIX",
     "backfill_sector",
+    "clean_company_name",
+    "is_synthetic_ticker",
     "looks_like_sample",
     "merge_into_existing",
     "normalize_record",
+    "resolve_ticker_from_name",
     "store_trade",
+    "synthetic_ticker",
 ]

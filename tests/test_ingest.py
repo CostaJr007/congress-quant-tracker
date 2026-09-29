@@ -8,14 +8,20 @@ from sqlalchemy.orm import sessionmaker
 
 from congress_quant_tracker.database.models import (
     Base,
+    Company,
     OptionsTrade,
     Politician,
     Trade,
 )
 from congress_quant_tracker.services.ingest import (
+    UNLISTED_PREFIX,
+    clean_company_name,
+    is_synthetic_ticker,
     looks_like_sample,
     normalize_record,
+    resolve_ticker_from_name,
     store_trade,
+    synthetic_ticker,
 )
 
 
@@ -184,3 +190,100 @@ def test_store_trade_inserts_option_row(session):
 def test_looks_like_sample():
     assert looks_like_sample({"member": "Sample trade for Nancy Pelosi"})
     assert not looks_like_sample({"member": "Nancy Pelosi"})
+
+
+def test_clean_company_name_strips_security_words():
+    assert clean_company_name("Zoetis Inc. Class A Common Stock (ZTS)") == "Zoetis Inc."
+    assert clean_company_name("AMRIZE LTD CMN") == "AMRIZE LTD"
+    assert clean_company_name("NVIDIA Corporation - Common Stock") == "NVIDIA Corporation"
+    assert clean_company_name("") == ""
+
+
+def test_synthetic_ticker_is_stable_and_marked():
+    ticker = synthetic_ticker("Oaktree Strategic Credit Fund Class S")
+    assert ticker == synthetic_ticker("Oaktree Strategic Credit Fund Class S")
+    assert ticker != synthetic_ticker("Space Exploration Technologies Corp.")
+    assert is_synthetic_ticker(ticker)
+    assert not is_synthetic_ticker("AAPL")
+    assert len(ticker) <= 6  # must survive sanitize_ticker / the DB column
+
+
+def test_tickerless_row_is_stored_instead_of_dropped():
+    rec, err = normalize_record(
+        {
+            "politician_name": "Sheri Biggs",
+            "asset_name": "Oaktree Strategic Credit Fund Class S",
+            "asset_type": "other",
+            "transaction_type": "P",
+            "trade_date": "06/30/2026",
+            "filing_date": "07/09/2026",
+            "value_min": 1_001,
+            "value_max": 15_000,
+        }
+    )
+    assert err is None
+    assert is_synthetic_ticker(rec["ticker"])
+    assert rec["unlisted"] is True
+
+
+def test_ticker_is_resolved_from_the_company_directory(session):
+    session.add(Company(ticker="ZTS", name="Zoetis Inc."))
+    session.commit()
+    rec, err = normalize_record(
+        {
+            "politician_name": "Markwayne Mullin",
+            "asset_name": "Zoetis Inc. Class A Common Stock",
+            "transaction_type": "buy",
+            "trade_date": "2025-11-10",
+        },
+        session=session,
+    )
+    assert err is None
+    assert rec["ticker"] == "ZTS"
+    assert rec["unlisted"] is False
+
+
+def test_resolve_ticker_ignores_ambiguous_and_unknown_names(session):
+    session.add_all(
+        [
+            Company(ticker="AAA", name="First Bancorp Inc."),
+            Company(ticker="BBB", name="First Bancorp Ltd."),
+            Company(ticker="AAPL", name="Apple Inc."),
+        ]
+    )
+    session.commit()
+    assert resolve_ticker_from_name("First Bancorp", session) == ""
+    assert resolve_ticker_from_name("Apple Inc.", session) == "AAPL"
+    assert resolve_ticker_from_name("Nonexistent Widgets", session) == ""
+    assert resolve_ticker_from_name("Apple Inc.", None) == ""
+
+
+def test_store_trade_records_unlisted_provenance_and_company_name(session):
+    pol = _pol(session)
+    rec, _err = normalize_record(
+        {
+            "politician_name": pol.name,
+            "asset_name": "Bloom Energy Corporation Class A",
+            "transaction_type": "buy",
+            "trade_date": "2026-07-24",
+            "source": "house_official",
+        }
+    )
+    assert store_trade(session, rec, pol) == "added"
+    row = session.query(Trade).one()
+    assert "unlisted" in row.notes
+    assert row.ticker.startswith(UNLISTED_PREFIX)
+
+    named, _err2 = normalize_record(
+        {
+            "politician_name": pol.name,
+            "ticker": "ZTS",
+            "asset_name": "Zoetis Inc. Class A Common Stock (ZTS)",
+            "transaction_type": "sell",
+            "trade_date": "2026-07-25",
+            "source": "house_official",
+        }
+    )
+    store_trade(session, named, pol)
+    company = session.query(Company).filter(Company.ticker == "ZTS").one()
+    assert company.name == "Zoetis Inc."

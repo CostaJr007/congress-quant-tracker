@@ -27,6 +27,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# OCR for scanned/hand-filled disclosure PDFs (image-only pages have no text
+# layer). rapidocr-onnxruntime is pure pip and works offline once installed.
+ocr = [
+    "rapidocr-onnxruntime>=1.4.4",
+    "pypdfium2>=4.30.0",
+    "pillow>=10.0.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

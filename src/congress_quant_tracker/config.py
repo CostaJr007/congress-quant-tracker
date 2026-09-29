@@ -46,6 +46,13 @@ class Settings:
     FETCH_TIMEOUT_SECONDS: int = int(os.getenv("FETCH_TIMEOUT_SECONDS", "120"))
     PARSE_BATCH_SIZE: int = int(os.getenv("PARSE_BATCH_SIZE", "10"))
 
+    # OCR fallback for scanned/hand-filled disclosure PDFs (no text layer)
+    OCR_ENABLED: bool = os.getenv("OCR_ENABLED", "1") == "1"
+    # Pages OCR'd per filing (scanned PTRs are usually 1-3 pages; some are 18+)
+    OCR_MAX_PAGES: int = int(os.getenv("OCR_MAX_PAGES", "60"))
+    # Rasterization scale: 3.0 gives ~200 DPI on House PTRs (OCR-optimal)
+    OCR_RENDER_SCALE: float = float(os.getenv("OCR_RENDER_SCALE", "3.0"))
+
     NO_YF: bool = os.getenv("NO_YF", "0") == "1"
     # Market prices / charts (can stay on even if NO_YF=1 for scorer)
     MARKET_DATA_ENABLED: bool = os.getenv("MARKET_DATA_ENABLED", "1") == "1"
@@ -64,6 +71,12 @@ class Settings:
     AUTO_SYNC_ON_STARTUP: bool = os.getenv("AUTO_SYNC_ON_STARTUP", "1") == "1"
     STARTUP_SYNC_DAYS: int = int(os.getenv("STARTUP_SYNC_DAYS", "90"))
     STARTUP_SYNC_MAX: int = int(os.getenv("STARTUP_SYNC_MAX", "60"))
+
+    # Collection window: pipelines never fetch or keep anything older than this.
+    DATA_WINDOW_DAYS: int = int(os.getenv("DATA_WINDOW_DAYS", "730"))
+    # Overlap when resuming from a checkpoint: late/amended filings surface days
+    # after their filing date, so every incremental run re-covers this tail.
+    SCREENER_OVERLAP_DAYS: int = int(os.getenv("SCREENER_OVERLAP_DAYS", "7"))
 
     # API bind address (127.0.0.1 = local only; use 0.0.0.0 to expose on LAN)
     API_HOST: str = os.getenv("API_HOST", "127.0.0.1")

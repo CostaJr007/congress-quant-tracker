@@ -72,9 +72,28 @@ export function isBuy(type?: string | null): boolean {
   return t === "buy" || t === "purchase";
 }
 
+export function isExchange(type?: string | null): boolean {
+  return (type || "").toLowerCase() === "exchange";
+}
+
 export function sideLabel(type?: string | null): string {
   if (!type) return "—";
+  if (isExchange(type)) return "Exch";
   return isBuy(type) ? "Buy" : "Sell";
+}
+
+export function assetTypeLabel(t?: string | null): string | null {
+  const map: Record<string, string> = {
+    stock: "Stock",
+    etf: "ETF",
+    option_call: "Call",
+    option_put: "Put",
+    crypto: "Crypto",
+    bond: "Bond",
+    other: "Other",
+  };
+  if (!t) return null;
+  return map[t.toLowerCase()] || t;
 }
 
 export function politicianHref(name: string): string {

@@ -68,7 +68,7 @@ class OfficialHousePipeline:
         self,
         years: list[int] | None = None,
         max_filings: int = 80,
-        since_days: int | None = 120,
+        since_days: int | None = None,
         use_tavily: bool = True,
         skip_download_if_exists: bool = True,
     ) -> dict:
@@ -76,7 +76,8 @@ class OfficialHousePipeline:
         Run official House update.
 
         max_filings: cap PDF downloads this run (newest first)
-        since_days: only filings within N days (None = all in index)
+        since_days: only filings within N days (None = incremental from the
+          last completed screener checkpoint, max DATA_WINDOW_DAYS back)
         """
         session = get_session(self.engine)
         log = UpdateLog(
@@ -136,9 +137,20 @@ class OfficialHousePipeline:
                     f"politicians_registered={stats['politicians_added']}"
                 )
 
-                cutoff = None
-                if since_days is not None:
-                    cutoff = date.today() - timedelta(days=since_days)
+            from congress_quant_tracker.services.screener import (
+                resolve_since_days,
+                save_checkpoint,
+            )
+
+            effective_days, mode = resolve_since_days(
+                session, since_days, "house_last_run", "house_last_filing"
+            )
+            stats["screener_mode"] = mode
+            stats["since_days"] = effective_days
+
+            cutoff = None
+            if effective_days is not None:
+                cutoff = date.today() - timedelta(days=effective_days)
 
                 selected = []
                 for f in index:
@@ -164,9 +176,20 @@ class OfficialHousePipeline:
                         stats["parse_methods"][method] = stats["parse_methods"].get(method, 0) + 1
                         stats["pdfs_parsed"] += 1
 
+                        extraction = parsed.get("extraction") or {}
+                        ocr_pages = extraction.get("ocr_pages") or []
+                        if ocr_pages:
+                            stats["filings_ocr"] = stats.get("filings_ocr", 0) + 1
+                            stats["ocr_pages"] = stats.get("ocr_pages", 0) + len(ocr_pages)
+                        row_stats = parsed.get("row_stats") or {}
+                        for key in ("rows_read", "rows_without_side", "rows_without_dates"):
+                            stats[key] = stats.get(key, 0) + int(row_stats.get(key, 0) or 0)
+
                         pol_info = parsed.get("politician") or {}
                         name = pol_info.get("name") or filing.get("name") or ""
                         trades = parsed.get("trades") or []
+                        if not trades:
+                            stats["filings_no_trades"] = stats.get("filings_no_trades", 0) + 1
 
                         if use_tavily and self.tavily.enabled and trades:
                             trades = self.tavily.enrich_trades(trades, politician=name, limit=8)
@@ -214,6 +237,16 @@ class OfficialHousePipeline:
             log.completed_at = datetime.utcnow()
             log.details = str(stats)
             session.commit()
+            try:
+                watermark = max(
+                    (f.get("filing_date") for f in selected if f.get("filing_date")),
+                    default=None,
+                )
+                save_checkpoint(
+                    session, "house_last_run", "house_last_filing", watermark
+                )
+            except Exception:
+                logger.debug("house checkpoint save failed", exc_info=True)
             print("[OK] House official done: %s" % {k: stats[k] for k in stats if k != "parse_methods"})
             try:
                 from congress_quant_tracker.notifiers.discord_notifier import notify_pipeline_result
@@ -341,11 +374,18 @@ class OfficialHousePipeline:
         raw["pdf_url"] = raw.get("pdf_url") or filing.get("pdf_url") or ""
         raw["source"] = "house_official"
 
-        rec, reason = normalize_record(raw)
+        rec, reason = normalize_record(raw, session=session)
         if not rec:
             if reason == "sample_data_rejected":
                 stats["samples_rejected"] = stats.get("samples_rejected", 0) + 1
+            else:
+                stats["trades_skipped"] = stats.get("trades_skipped", 0) + 1
+                stats.setdefault("skip_reasons", {})
+                stats["skip_reasons"][reason] = stats["skip_reasons"].get(reason, 0) + 1
             return False
+
+        if rec.get("unlisted"):
+            stats["trades_unlisted"] = stats.get("trades_unlisted", 0) + 1
 
         pol, created = self._ensure_politician(
             session, rec["politician_name"], filing=filing, pol_info=pol_info

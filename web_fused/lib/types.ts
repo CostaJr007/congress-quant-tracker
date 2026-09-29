@@ -1,7 +1,7 @@
 export type Party = "D" | "R" | "I" | string | null;
 export type Chamber = "House" | "Senate" | string | null;
 export type Tag = "routine" | "noteworthy" | "suspicious" | "high_alert" | string | null;
-export type TradeSide = "Purchase" | "Sale" | "buy" | "sell" | string | null;
+export type TradeSide = "Purchase" | "Sale" | "Exchange" | "buy" | "sell" | "exchange" | string | null;
 
 export interface Trade {
   id: number;
@@ -10,10 +10,13 @@ export interface Trade {
   transaction_type: TradeSide;
   transaction_date: string | null;
   notification_date: string | null;
+  lag_days: number | null;
   amount_min: number | null;
   amount_max: number | null;
   amount: string | null;
   asset_type: string | null;
+  strike: number | null;
+  expiration_date: string | null;
   score: number;
   tag: Tag;
   reason: string | null;
@@ -251,6 +254,7 @@ export interface SearchResponse {
     total_volume: number;
     unique_politicians: number;
     avg_score: number;
+    holders?: { name: string; party: Party; trades: number }[];
   }[];
 }
 

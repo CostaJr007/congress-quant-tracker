@@ -21,6 +21,20 @@ def test_extract_member_name():
     assert extract_member_name(PTR_TEXT) == "Hon. Nancy Pelosi".replace("Hon. ", "")
 
 
+def test_extract_member_name_handles_scanned_layouts():
+    # label row of a scanned PTR, plus the signature block OCR mangles
+    scanned = (
+        "HAND DELIVERED\nName Rohit Khanna Page. 81\nNAME Rohrt Khanna OFFICETELEPHONE\n"
+        "...\nNAME: R br KOhanza Pare\n"
+    )
+    assert extract_member_name(scanned) == "Rohit Khanna"
+    assert extract_member_name("NAME Rohrt Khanna OFFICETELEPHONE 2022") == "Rohrt Khanna"
+    # a blank name cell must not be reported as a name
+    assert extract_member_name("Name:   ") == ""
+    assert extract_member_name("no name here") == ""
+    assert extract_member_name("nothing", fallback="From Index") == "From Index"
+
+
 def test_parse_trades_regex_extracts_core_rows():
     trades = parse_trades_regex(PTR_TEXT)
     by_ticker = {t["ticker"]: t for t in trades}

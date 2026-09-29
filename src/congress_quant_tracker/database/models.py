@@ -179,6 +179,36 @@ class UpdateLog(Base):
         return f"<UpdateLog {self.update_type} [{self.status}]>"
 
 
+class PipelineState(Base):
+    """Durable screener checkpoints: what each pipeline already covered.
+
+    Keys (all values are ISO strings):
+      house_last_run / senate_last_run / full_last_run  — completed-at stamp
+      house_last_filing                                 — max filing_date seen
+    A run with since_days=None resumes from the checkpoint (minus a small
+    overlap for late/amended filings) instead of re-screening everything.
+    """
+
+    __tablename__ = "pipeline_state"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+def get_pipeline_state(session: Session, key: str) -> Optional[str]:
+    row = session.query(PipelineState).filter(PipelineState.key == key).first()
+    return row.value if row else None
+
+
+def set_pipeline_state(session: Session, key: str, value: Optional[str]) -> None:
+    row = session.query(PipelineState).filter(PipelineState.key == key).first()
+    if row:
+        row.value = value
+    else:
+        session.add(PipelineState(key=key, value=value))
+
+
 def get_engine(database_url: str):
     """Create SQLAlchemy engine."""
     return create_engine(database_url, echo=False)

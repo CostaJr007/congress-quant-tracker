@@ -119,14 +119,41 @@ npm run dev -- -p 3000
 ### 4. Data pipelines
 
 ```bash
-python scripts/update_official.py   # House Clerk
+python scripts/update_official.py   # House Clerk (incremental by default)
 python scripts/update_senate.py     # Senate (direct, then proxy)
 python scripts/enrich_all.py        # sectors + photos + options + rescore
 python scripts/rescore.py           # rescore only
+python scripts/reparse_ptr_pdfs.py  # re-read already-downloaded PTR PDFs
 ```
 *(You can also prefix commands with `uv run` if uv is installed).*
+Pipelines are **incremental**: each completed run saves a screener checkpoint
+(`pipeline_state`) and the next run only fetches filings newer than the
+watermark minus a 7-day overlap for late/amended disclosures — never further
+back than `DATA_WINDOW_DAYS` (2 years). Pass `--days N` to force a window.
+Repair jobs run in dry-run mode unless `--apply` is passed:
+`scripts/merge_duplicate_politicians.py` (same person registered under
+several name spellings), `scripts/purge_sample_data.py` (demo rows, and
+`--trades-only` to leave company market caps alone),
+`scripts/repair_data_quality.py` (absurd dates, zero→NULL amounts, bogus
+options) and `scripts/prune_old_trades.py` (rows older than the window).
 
 HTTP equivalents live under `POST /api/pipeline/*`.
+
+House PTR filings come in two shapes: born-digital PDFs with a text layer, and
+scanned/hand-filled pages that are images only. The parser handles both:
+`parsers/pdf_text.py` walks pdfplumber → pypdf → pypdfium2 → OCR per page, and
+`parsers/ptr_form.py` reads the printed table of scanned pages, where the side
+is an X under "Purchase"/"Sale"/"Exch" and the amount is an X in one of the ten
+lettered amount columns. Scanned filings are read through OCR, which needs an
+extra dependency:
+
+```bash
+uv pip install -e ".[ocr]"     # or: pip install -e ".[ocr]"
+```
+
+Without an OCR engine, image-only filings are reported as unread (`method=empty`)
+instead of yielding a silent zero. `scripts/reparse_ptr_pdfs.py --dry-run`
+shows what each cached PDF parses to before anything is written.
 
 ### Data guarantees
 
@@ -139,6 +166,10 @@ All sources funnel through **one ingestion path**
   (`house_official`, `senate`, ...).
 - Same-day/same-side duplicates are **merged** (widened ranges, backfilled
   fields), never silently dropped.
+- A disclosed trade is never dropped for lack of a ticket symbol: the symbol is
+  resolved from the asset name when the company directory knows it, and
+  otherwise stored under a stable `XX……` pseudo-symbol (`notes` carries
+  `;unlisted`) so the disclosure stays visible.
 - Demo/sample payloads are rejected at the door.
 - `scripts/purge_sample_data.py` removes legacy seeded rows (dry-run by
   default; `--apply` to execute). The old `scripts/seed_database.py` refuses

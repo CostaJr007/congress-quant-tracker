@@ -9,7 +9,11 @@ from urllib.parse import urlencode
 
 import httpx
 
-from congress_quant_tracker.common import normalize_transaction_type
+from congress_quant_tracker.common import (
+    asset_type_from_code,
+    normalize_transaction_type,
+    ptr_code_in_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +55,9 @@ def _load_members_db():
         return _members_db
 
     try:
-        import yaml
         from pathlib import Path
+
+        import yaml
 
         yaml_path = Path(__file__).parent.parent.parent.parent / "data" / "legislators-current.yaml"
         if not yaml_path.exists():
@@ -185,6 +190,14 @@ def sanitize_trade_dates(
     if not trade_date and not filing_date:
         return trade_date, filing_date, False
 
+    # A filing stamp from the future (or last century) is a parse error, not
+    # data: drop it before it can "correct" the trade date into absurdity.
+    if filing_date and (
+        filing_date > today + timedelta(days=14) or filing_date.year < 2000
+    ):
+        filing_date = None
+        corrected = True
+
     def is_bad_trade(td: Optional[date], fd: Optional[date]) -> bool:
         if not td:
             return False
@@ -261,16 +274,53 @@ def normalize_trade(raw: dict) -> dict:
 
 
 def classify_asset(asset_name: str, ticker: str = "") -> str:
-    """Classify asset type from name and ticker."""
+    """Classify asset type from name and ticker.
+
+    A bracketed PTR asset-type code wins: it is what the filer declared, while
+    the wording around it is often an OCR remnant.
+    """
     name_lower = (asset_name or "").lower()
     ticker_u = (ticker or "").upper()
 
-    # Options first (call/put wording is common in House PDFs)
-    is_option = any(kw in name_lower for kw in ("option", " call", " put", "[op]", "strike"))
-    if is_option or re.search(r"\b(call|put)s?\b", name_lower):
-        if re.search(r"\bputs?\b", name_lower) or " put" in name_lower:
+    code = ptr_code_in_name(asset_name)
+    declared = asset_type_from_code(code)
+    if declared and declared != "option":
+        return declared
+
+    # Options need wording evidence, not just a bare [OP] code: OCR mangles
+    # [ST] into [OP], and common-stock rows ("CrowdStrike ... Class A Common
+    # Stock (CRWD) [OP]") must stay stocks. FLEX shorthand ("PM@245", "@690",
+    # "EXP") counts only next to a call/put word or a strike-looking number,
+    # so issuers like FLEX Ltd ("FLEXLTDCMN") stay stocks.
+    has_put_kw = bool(re.search(r"\bputs?\b", name_lower) or " put" in name_lower)
+    has_call_kw = bool(
+        re.search(r"\bcalls?\b", name_lower)
+        or " call" in name_lower
+        # word-bound: "CrowdStrike" is an issuer, not a strike
+        or re.search(r"\bstrikes?\b", name_lower)
+    )
+    strike_num = bool(
+        re.search(r"@\s*\$?\s*[\d,]", name_lower)
+        or re.search(r"PM\s*@?\s*\$?\s*[\d,]", name_lower, re.I)
+    )
+    flexish = bool(
+        "flex" in name_lower
+        or "@" in name_lower
+        or re.search(r"\bexp\b", name_lower)
+    )
+    has_call = has_call_kw or (
+        flexish and (has_call_kw or has_put_kw or strike_num)
+    )
+    has_put = has_put_kw
+    if declared == "option" or "option" in name_lower:
+        if has_put and not has_call:
             return "option_put"
-        return "option_call"
+        if has_call:
+            return "option_put" if has_put else "option_call"
+        # Bare [OP]/"option" with no call/put evidence: fall through and let
+        # the equity/fund/bond wording decide (usually "stock").
+    elif has_put or has_call:
+        return "option_put" if has_put else "option_call"
 
     crypto_tickers = {
         "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "DOT", "MATIC",
@@ -284,22 +334,49 @@ def classify_asset(asset_name: str, ticker: str = "") -> str:
 
     if any(kw in name_lower for kw in ("etf", "fund", "trust", "index")):
         return "etf"
-    if any(kw in name_lower for kw in ("bond", "treasury", "note", "municipal", "t-bill")):
+    # "be/r" / "arvbe" = OCR of "REV BE/R" (revenue bond) on scanned PTRs.
+    # ("arv" alone would hit Marvell, so the match is deliberately longer.)
+    if any(
+        kw in name_lower
+        for kw in (
+            "bond", "treasury", "note", "municipal", "muni", "t-bill",
+            "revenue", "be/r", "arvbe", "general oblig", "go bond",
+        )
+    ):
         return "bond"
     return "stock"
 
 
 def parse_option_details(asset_name: str, asset_type: str) -> Optional[dict]:
-    """Best-effort extraction of strike / expiration from disclosure text."""
+    """Best-effort extraction of strike / expiration from disclosure text.
+
+    Only a number that context ties to the strike is used: a bare "$11.80" in a
+    description like "10 puts at $11.80" is a premium, and reporting it as the
+    strike would be worse than reporting none.
+    """
     if not asset_type or not asset_type.startswith("option"):
         return None
     text = asset_name or ""
     option_type = "put" if asset_type == "option_put" else "call"
 
     strike = None
-    m_strike = re.search(r"\$\s*([\d,]+(?:\.\d+)?)\s*(?:strike)?", text, re.I)
+    m_strike = re.search(
+        r"strike\s*(?:price)?\s*(?:of\s*)?[:#]?\s*\$?\s*([\d,]+(?:\.\d+)?)", text, re.I
+    )
     if not m_strike:
-        m_strike = re.search(r"strike\s*(?:price)?\s*[:#]?\s*\$?\s*([\d,]+(?:\.\d+)?)", text, re.I)
+        # Standard PTR option names: "CALL $200" / "CALL/MSFT FLEX ... @200".
+        # Deliberately tight: "10 puts at $11.80" is a premium, not a strike.
+        m_strike = re.search(
+            r"\b(?:call|put)s?\b\s*[@$]\s*([\d,]+(?:\.\d+)?)", text, re.I
+        )
+    if not m_strike:
+        # FLEX shorthand: "PM@245EXP", "CALL/TMO ... @ 555 EXP", "PUT/XSP @690".
+        m_strike = re.search(r"@\s*\$?\s*([\d,]+(?:\.\d+)?)", text)
+    if not m_strike:
+        # FLEX shorthand without @: "CALL/MSFT FLEX EURO PM485 EXP",
+        # "CALL/CCEPFLEXEUROPM99EXP". No leading boundary: the strike sits
+        # glued after EURO/PM. Option-only context makes this safe.
+        m_strike = re.search(r"PM\s*@?\s*\$?\s*([\d,]+(?:\.\d+)?)", text, re.I)
     if m_strike:
         try:
             strike = float(m_strike.group(1).replace(",", ""))
@@ -308,9 +385,9 @@ def parse_option_details(asset_name: str, asset_type: str) -> Optional[dict]:
 
     expiration = None
     for fmt, pat in (
-        ("%m/%d/%Y", r"\b(\d{1,2}/\d{1,2}/\d{4})\b"),
-        ("%Y-%m-%d", r"\b(\d{4}-\d{2}-\d{2})\b"),
-        ("%m/%d/%y", r"\b(\d{1,2}/\d{1,2}/\d{2})\b"),
+        ("%m/%d/%Y", r"(\d{1,2}/\d{1,2}/\d{4})"),
+        ("%Y-%m-%d", r"(\d{4}-\d{2}-\d{2})"),
+        ("%m/%d/%y", r"(\d{1,2}/\d{1,2}/\d{2})"),
     ):
         m = re.search(pat, text)
         if m:
@@ -359,8 +436,14 @@ async def fetch_trades(chamber: str = "house", limit: int = 200, offset: int = 0
     return []
 
 
-async def fetch_all_trades(max_pages: int = 50) -> list[dict]:
-    """Fetch all available trades from CongressInvests."""
+async def fetch_all_trades(
+    max_pages: int = 50, since: date | None = None
+) -> list[dict]:
+    """Fetch all available trades from CongressInvests.
+
+    The feed pages newest-first, so `since` stops paging as soon as a whole
+    page is older than the cutoff — incremental runs fetch 1-2 pages.
+    """
     all_trades = []
     members_db = _load_members_db()
 
@@ -407,8 +490,31 @@ async def fetch_all_trades(max_pages: int = 50) -> list[dict]:
 
             if len(trades) < 200:
                 break
+            if since is not None and _page_older_than(trades, since):
+                break
 
     return all_trades
+
+
+def _page_older_than(trades: list[dict], since: date) -> bool:
+    """True when every dated row on the page precedes the cutoff.
+
+    Undated rows never stop the pager: they carry no signal either way.
+    """
+    dated = [
+        t for t in trades if t.get("filing_date") or t.get("trade_date")
+    ]
+    if not dated:
+        return False
+    for t in dated:
+        for key in ("filing_date", "trade_date"):
+            raw = str(t.get(key) or "")[:10]
+            try:
+                if raw and date.fromisoformat(raw) >= since:
+                    return False
+            except ValueError:
+                continue
+    return True
 
 
 def parse_date(date_str: str) -> Optional[date]:

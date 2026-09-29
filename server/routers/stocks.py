@@ -30,6 +30,9 @@ def api_stocks(
             func.sum(case((Trade.transaction_type == "buy", 1), else_=0)).label("buys"),
             func.sum(case((Trade.transaction_type == "sell", 1), else_=0)).label("sells"),
         ).group_by(Trade.ticker)
+        # Assets disclosed without a market symbol (private companies, funds)
+        # are stored under the XX-prefixed pseudo-symbol and have no quote.
+        query = query.filter(~Trade.ticker.like("XX____"))
 
         if q:
             like = f"%{q}%"

@@ -11,20 +11,25 @@ router = APIRouter()
 
 
 @router.post("/api/pipeline/run")
-def api_run_pipeline():
+def api_run_pipeline(
+    days: int | None = Query(None, ge=7, le=730),
+):
     from congress_quant_tracker.services.data_updater import DataUpdateService
 
     updater = DataUpdateService()
-    stats = updater.run_full_update()
+    stats = updater.run_full_update(since_days=days)
     return {"status": "completed", "stats": stats}
 
 
 @router.post("/api/pipeline/house-official")
 def api_house_official(
     max_filings: int = Query(60, ge=1, le=300),
-    days: int = Query(150, ge=7, le=730),
+    days: int | None = Query(None, ge=7, le=730),
 ):
-    """Pull newest House PTRs from the official Clerk site (XML + PDF)."""
+    """Pull newest House PTRs from the official Clerk site (XML + PDF).
+
+    days=None resumes from the last completed screener checkpoint.
+    """
     from congress_quant_tracker.services.official_pipeline import OfficialHousePipeline
 
     stats = OfficialHousePipeline().run(
@@ -47,11 +52,15 @@ def api_senate_probe():
 def api_senate_update(
     strategy: str = Query("auto", description="auto|congressinvests|efd"),
     pages: int = Query(25, ge=1, le=80),
+    days: int | None = Query(None, ge=7, le=730),
 ):
-    """Update Senate trades (auto falls back if eFD is Akamai-blocked)."""
+    """Update Senate trades (auto falls back if eFD is Akamai-blocked).
+
+    days=None resumes from the last completed screener checkpoint.
+    """
     from congress_quant_tracker.services.senate_pipeline import SenatePipeline
 
-    stats = SenatePipeline().run(strategy=strategy, max_pages=pages)
+    stats = SenatePipeline().run(strategy=strategy, max_pages=pages, since_days=days)
     return {"status": "completed", "stats": stats}
 
 

@@ -36,6 +36,7 @@ def main() -> None:
         help="Data source strategy",
     )
     p.add_argument("--pages", type=int, default=25, help="CongressInvests max pages (200 rows each)")
+    p.add_argument("--days", type=int, default=None, help="Only rows newer than N days (default: incremental from checkpoint)")
     p.add_argument("--efd-max", type=int, default=40, help="Max eFD reports if using Playwright")
     p.add_argument("--headed", action="store_true", help="Show browser window (efd strategy)")
     p.add_argument("--probe-only", action="store_true", help="Only test eFD access")
@@ -62,6 +63,7 @@ def main() -> None:
         max_pages=args.pages,
         max_efd_reports=args.efd_max,
         headless=not args.headed,
+        since_days=args.days,
     )
     print("STATS:", stats)
 

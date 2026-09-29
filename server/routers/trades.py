@@ -21,14 +21,15 @@ def api_trade_months(
     session = get_db()
     try:
         col = Trade.trade_date if by == "trade" else Trade.filing_date
-        # Prefer filing_date; fall back rows with null filing via coalesce in app layer
+        # Prefer filing_date; fall back rows with null filing via coalesce in app layer.
+        # Future stamps are parse errors, never real buckets.
         rows = (
             session.query(
                 extract("year", col).label("y"),
                 extract("month", col).label("m"),
                 func.count(Trade.id),
             )
-            .filter(col.isnot(None))
+            .filter(col.isnot(None), col <= date.today())
             .group_by("y", "m")
             .order_by(desc("y"), desc("m"))
             .all()
@@ -64,6 +65,9 @@ def api_trades(
     chamber: str | None = None,
     month: str | None = Query(None, description="YYYY-MM filter"),
     date_field: str = Query("filing", description="filing | trade — month filter field"),
+    has_value: bool | None = Query(
+        None, description="true = only rows with a known dollar amount"
+    ),
     sort_by: str = "date",
     enrich: bool = Query(False, description="Attach yfinance performance (rate-limited)"),
 ):
@@ -90,6 +94,13 @@ def api_trades(
                 query = query.filter(Trade.transaction_type == "sell")
         if asset_type:
             query = query.filter(Trade.asset_type == asset_type)
+        if has_value is True:
+            # NULL = unknown (new rows); 0 = legacy unknown not yet repaired.
+            query = query.filter(Trade.value_max.isnot(None), Trade.value_max != 0)
+        if has_value is False:
+            query = query.filter(
+                or_(Trade.value_max.is_(None), Trade.value_max == 0)
+            )
         if min_score is not None:
             query = query.filter(Trade.score >= min_score)
         if party:

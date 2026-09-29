@@ -1,9 +1,16 @@
 """Parse House Periodic Transaction Report PDFs.
 
 Strategy:
-  1. pdfplumber text extraction
-  2. Deterministic regex (fast, free, good on standard PTR layout)
-  3. Optional Groq LLM cleanup / fill gaps when GROQ_API_KEY is set
+  1. Page-level text extraction with OCR fallback for scanned filings
+     (see `pdf_text`): pdfplumber -> pypdf -> pypdfium2 -> OCR
+  2. Row parsing anchored on the transaction/notification dates, which reads
+     wrapped names, split amounts, ticker-after-amount and ticker-less rows
+  3. Deterministic regex (fast, good on the standard one-line PTR layout)
+  4. Optional Groq LLM cleanup / fill gaps when GROQ_API_KEY is set
+
+Scanned/hand-filled PTRs carry no dollar amounts at all: the amount is a checked
+box in one of ten lettered columns. Those are recovered from the OCR geometry by
+`ptr_rows.checked_amounts`.
 """
 
 from __future__ import annotations
@@ -11,15 +18,27 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import httpx
-import pdfplumber
 
 from congress_quant_tracker.common import normalize_transaction_type
 from congress_quant_tracker.config import settings
+from congress_quant_tracker.parsers.pdf_text import (
+    DocumentText,
+    extract_document,
+)
+from congress_quant_tracker.parsers.pdf_text import (
+    extract_text as _extract_document_text,
+)
+from congress_quant_tracker.parsers.ptr_form import read_page
+from congress_quant_tracker.parsers.ptr_rows import (
+    dedupe_key,
+    parse_row,
+    parse_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +46,7 @@ logger = logging.getLogger(__name__)
 OWNER_CODES = {"SP", "DC", "JT", "C", "Self", "self"}
 
 
-def _parse_date(s: str) -> Optional[date]:
+def _parse_date(s: str) -> date | None:
     if not s:
         return None
     s = s.strip()
@@ -55,20 +74,65 @@ def _parse_amount(amount: str) -> tuple[int, int, str]:
     return 0, 0, cleaned
 
 
-def extract_text(pdf_path: Path) -> str:
-    parts: list[str] = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages[: settings.MAX_PDF_PAGES]:
-            t = page.extract_text() or ""
-            if t.strip():
-                parts.append(t)
-    return "\n".join(parts)
+def extract_text(pdf_path: Path, **kwargs) -> str:
+    """Whole-document text (text layer, OCR'ing image-only pages when needed)."""
+    return _extract_document_text(pdf_path, **kwargs)
+
+
+_NAME_STOPWORDS = {
+    "page", "status", "state", "district", "member", "office", "telephone",
+    "name", "report", "periodic", "transaction", "filing", "id", "ptr",
+}
+_NAME_TITLES = {"hon", "mr", "mrs", "ms", "dr", "sen", "rep", "representative", "senator"}
+
+
+def _clean_member_name(candidate: str) -> str:
+    """Keep the person's words, drop the form-field noise OCR drags along."""
+    words: list[str] = []
+    for token in re.split(r"\s+", (candidate or "").strip()):
+        bare = token.strip(".,;:").lower()
+        if bare in _NAME_TITLES:
+            continue
+        glued_noise = any(
+            noise in bare for noise in ("office", "telephone", "district", "periodic")
+        )
+        if (
+            bare in _NAME_STOPWORDS
+            or glued_noise
+            or not re.fullmatch(r"[A-Za-z][A-Za-z'\-]{0,20}", token.strip(".,"))
+        ):
+            break
+        words.append(token.strip(".,").title())
+        if len(words) == 3:
+            break
+    return " ".join(words)
+
+
+def _is_plausible_name(name: str) -> bool:
+    words = name.split()
+    return len(words) >= 2 and all(len(word) >= 2 for word in words)
 
 
 def extract_member_name(text: str, fallback: str = "") -> str:
-    m = re.search(r"Name:\s*(?:Hon\.\s*)?(.+)", text)
-    if m:
-        return m.group(1).strip()
+    """Member name from the filing text; empty when the text does not show one.
+
+    Candidates from both layouts are considered in order of appearance, because
+    the name label ("Name Rohit Khanna") sits above the signature block OCR
+    renders as "NAME: R br KOhanza Pare".
+    """
+    patterns = (
+        r"Name:\s*(.+)",
+        # Scanned filings: "NAME Rohit Khanna" / "NAME. R hht Kha na"
+        r"\bNAME[:.\s]+([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,3})",
+    )
+    candidates: list[tuple[int, str]] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.I):
+            candidates.append((match.start(), match.group(1)))
+    for _position, raw in sorted(candidates, key=lambda item: item[0]):
+        cleaned = _clean_member_name(raw)
+        if _is_plausible_name(cleaned):
+            return cleaned
     return fallback
 
 
@@ -76,7 +140,7 @@ def _normalize_tx(tx_raw: str) -> str:
     return normalize_transaction_type(tx_raw)
 
 
-def parse_trades_regex(text: str, filing_meta: Optional[dict] = None) -> list[dict]:
+def parse_trades_regex(text: str, filing_meta: dict | None = None) -> list[dict]:
     """Parse trades from House PTR plain text (handles multi-line layouts)."""
     trades: list[dict] = []
     filing_meta = filing_meta or {}
@@ -183,7 +247,7 @@ def parse_trades_regex(text: str, filing_meta: Optional[dict] = None) -> list[di
     return trades
 
 
-def _coerce_groq_trade(t: dict) -> Optional[dict]:
+def _coerce_groq_trade(t: dict) -> dict | None:
     """Strictly validate/coerce one LLM-extracted trade.
 
     LLM output is never trusted: every field is re-parsed, bounded and typed
@@ -238,7 +302,7 @@ def _coerce_groq_trade(t: dict) -> Optional[dict]:
     }
 
 
-def parse_with_groq(text: str, filing_meta: Optional[dict] = None) -> list[dict]:
+def parse_with_groq(text: str, filing_meta: dict | None = None) -> list[dict]:
     """Use Groq (OpenAI-compatible) to extract trades as JSON."""
     api_key = (settings.GROQ_API_KEY or "").strip()
     if len(api_key) < 20 or api_key in ("your_key", "xxx", "changeme"):
@@ -346,33 +410,120 @@ def merge_trades(primary: list[dict], secondary: list[dict]) -> list[dict]:
     return list(by_key.values())
 
 
-def parse_house_ptr(pdf_path: Path, filing_meta: Optional[dict] = None) -> dict[str, Any]:
-    """Full parse of one House PTR PDF."""
+def merge_parsed_trades(primary: list[dict], secondary: list[dict]) -> list[dict]:
+    """Merge two views of the same filing, keeping the richest version of a row.
+
+    Rows are matched on (ticker-or-asset, trade_date, side) because PTR values
+    are ranges: two views of one trade differ in wording, not in identity.
+    Dollar values found in the text always win over a checked-column band.
+    """
+    by_key: dict[tuple, dict] = {}
+    for trade in primary:
+        by_key.setdefault(dedupe_key(trade), dict(trade))
+    for trade in secondary:
+        key = dedupe_key(trade)
+        base = by_key.get(key)
+        if base is None:
+            by_key[key] = dict(trade)
+            continue
+        for field in ("asset_name", "owner", "value_range", "asset_type", "description"):
+            if not base.get(field) and trade.get(field):
+                base[field] = trade[field]
+        if not base.get("ticker") and trade.get("ticker"):
+            base["ticker"] = trade["ticker"]
+        base["value_min"] = min(
+            v for v in (base.get("value_min"), trade.get("value_min")) if v
+        ) if any((base.get("value_min"), trade.get("value_min"))) else 0
+        base["value_max"] = max(base.get("value_max") or 0, trade.get("value_max") or 0)
+    return list(by_key.values())
+
+
+def _parse_method(rows: list[dict], regex: list[dict], doc: DocumentText) -> str:
+    parts: list[str] = []
+    if rows:
+        parts.append("rows" if not doc.ocr_pages else "rows+ocr")
+    if regex:
+        parts.append("regex" if not parts else "regex")
+    if not parts:
+        return "empty" if not doc.text.strip() else "unparsed"
+    return "+".join(dict.fromkeys(parts))
+
+
+def parse_house_ptr(pdf_path: Path, filing_meta: dict | None = None) -> dict[str, Any]:
+    """Full parse of one House PTR PDF (text layer or scanned image)."""
     filing_meta = filing_meta or {}
-    text = extract_text(pdf_path)
+    doc = extract_document(pdf_path)
+    text = doc.text
+
+    base_result = {
+        "politician": {"name": filing_meta.get("name"), "chamber": "house"},
+        "trades": [],
+        "text_len": len(text),
+        "extraction": doc.diagnostics(),
+        "doc_id": filing_meta.get("doc_id") or Path(pdf_path).stem,
+        "pdf_url": filing_meta.get("pdf_url"),
+        "source_pdf": str(pdf_path),
+    }
     if not text.strip():
-        return {
-            "politician": {"name": filing_meta.get("name"), "chamber": "house"},
-            "trades": [],
-            "text_len": 0,
-            "method": "empty",
-        }
+        return {**base_result, "method": "empty"}
 
-    name = extract_member_name(text, filing_meta.get("name", ""))
+    # The Clerk's index carries the member's canonical name; OCR of a scanned
+    # page does not ("Rohrt Khanna OFFICETELEPHONE").
+    name = (filing_meta.get("name") or "").strip() or extract_member_name(text)
+
+    row_trades: list[dict] = []
+    row_stats = {
+        "rows_read": 0,
+        "rows_without_side": 0,
+        "rows_without_dates": 0,
+        "form_pages": 0,
+        "forms_with_type_columns": 0,
+    }
+    for page in doc.pages:
+        if not page.text.strip():
+            continue
+        if page.method == "ocr":
+            form_rows, geometry = read_page(pdf_path, page)
+            if form_rows:
+                row_stats["form_pages"] += 1
+                if geometry is not None and geometry.usable_types:
+                    row_stats["forms_with_type_columns"] += 1
+                    for row in form_rows:
+                        # The side is a checked box here; an unmarked row is
+                        # reported as unread rather than assumed to be a buy.
+                        if not row.side:
+                            row_stats["rows_without_side"] += 1
+                            continue
+                        parsed = parse_row(
+                            row.text,
+                            side=row.side,
+                            value_min=row.value_min,
+                            value_max=row.value_max,
+                            value_range=row.value_range,
+                            amount_column=row.amount_letter or "",
+                        )
+                        if parsed:
+                            row_trades.append(parsed)
+                            row_stats["rows_read"] += 1
+                        else:
+                            row_stats["rows_without_dates"] += 1
+                    continue
+        page_trades = parse_rows(page.text)
+        row_trades.extend(page_trades)
+        row_stats["rows_read"] += len(page_trades)
+
     regex_trades = parse_trades_regex(text, filing_meta)
-    method = "regex"
-    trades = regex_trades
+    trades = merge_parsed_trades(row_trades, regex_trades)
+    method = _parse_method(row_trades, regex_trades, doc)
 
-    # Groq when enabled and (few regex hits OR always if FORCE)
+    # Groq when enabled and (few hits so far OR always if FORCE)
     groq_key = (settings.GROQ_API_KEY or "").strip()
-    use_groq = len(groq_key) >= 20 and (
-        settings.LLM_ENABLED or len(regex_trades) < 2
-    )
+    use_groq = len(groq_key) >= 20 and (settings.LLM_ENABLED or len(trades) < 2)
     if use_groq:
         groq_trades = parse_with_groq(text, {**filing_meta, "name": name})
         if groq_trades:
-            trades = merge_trades(regex_trades, groq_trades) if regex_trades else groq_trades
-            method = "regex+groq" if regex_trades else "groq"
+            trades = merge_parsed_trades(trades, groq_trades)
+            method = f"{method}+groq"
 
     return {
         "politician": {
@@ -384,7 +535,9 @@ def parse_house_ptr(pdf_path: Path, filing_meta: Optional[dict] = None) -> dict[
         "trades": trades,
         "text_len": len(text),
         "method": method,
-        "doc_id": filing_meta.get("doc_id") or pdf_path.stem,
+        "extraction": doc.diagnostics(),
+        "row_stats": row_stats,
+        "doc_id": filing_meta.get("doc_id") or Path(pdf_path).stem,
         "pdf_url": filing_meta.get("pdf_url"),
         "source_pdf": str(pdf_path),
     }

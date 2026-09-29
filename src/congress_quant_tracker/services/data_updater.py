@@ -42,8 +42,13 @@ class DataUpdateService:
         self.enricher = CompanyEnricher()
         self.scorer = TradeScorer()
 
-    def run_full_update(self) -> dict:
-        """Run a complete data update cycle using CongressInvests API."""
+    def run_full_update(self, since_days: int | None = None) -> dict:
+        """Run a complete data update cycle using CongressInvests API.
+
+        since_days=None resumes from the last completed screener checkpoint
+        (max DATA_WINDOW_DAYS back); the feed pages newest-first and stops
+        early at the cutoff.
+        """
         session = get_session(self.engine)
 
         log = UpdateLog(
@@ -67,9 +72,23 @@ class DataUpdateService:
             log.status = "in_progress"
             session.commit()
 
+            from datetime import timedelta as _td
+
+            from congress_quant_tracker.services.screener import (
+                resolve_since_days,
+                save_checkpoint,
+            )
+
+            effective_days, mode = resolve_since_days(
+                session, since_days, "full_last_run"
+            )
+            stats["screener_mode"] = mode
+            stats["since_days"] = effective_days
+            since = datetime.utcnow().date() - _td(days=effective_days)
+
             # Phase 1: Fetch from CongressInvests API
             print("[Phase 1/4] Fetching trades from CongressInvests API...")
-            all_trades = asyncio.run(fetch_all_trades())
+            all_trades = asyncio.run(fetch_all_trades(since=since))
             stats["trades_fetched"] = len(all_trades)
             print(f"  -> Fetched {len(all_trades)} trades from API")
 
@@ -102,6 +121,10 @@ class DataUpdateService:
             log.completed_at = datetime.utcnow()
             log.details = str(stats)
             session.commit()
+            try:
+                save_checkpoint(session, "full_last_run")
+            except Exception:
+                logger.debug("full checkpoint save failed", exc_info=True)
             # ASCII-only: Windows consoles often fail on emoji (cp1252)
             print(f"\n[OK] Update complete! Added {stats['trades_added']} new trades")
             try:
@@ -164,10 +187,12 @@ class DataUpdateService:
         if not member_name:
             return
 
-        rec, reason = normalize_record(trade_data)
+        rec, reason = normalize_record(trade_data, session=session)
         if not rec:
             if reason == "sample_data_rejected":
                 stats["samples_rejected"] = stats.get("samples_rejected", 0) + 1
+            else:
+                stats["trades_skipped"] = stats.get("trades_skipped", 0) + 1
             return
 
         # Ensure the politician FIRST — a skipped/duplicate trade must never
@@ -272,6 +297,22 @@ class DataUpdateService:
                 Trade.asset_type.in_(["option_call", "option_put"])
             ).all():
                 if t.id in existing_opt_ids:
+                    # Re-extract: the stored row may predate the strike fix
+                    # (e.g. FLEX "@245" names) and carry a NULL strike.
+                    opt = parse_option_details(t.asset_name or "", t.asset_type or "")
+                    if opt and opt.get("strike") is not None:
+                        row = session.query(OptionsTrade).filter(
+                            OptionsTrade.trade_id == t.id
+                        ).first()
+                        if row and row.strike is None:
+                            row.strike = opt["strike"]
+                            stats["options_added"] = stats.get("options_added", 0) + 1
+                    if opt and opt.get("expiration_date") is not None:
+                        row = session.query(OptionsTrade).filter(
+                            OptionsTrade.trade_id == t.id
+                        ).first()
+                        if row and row.expiration_date is None:
+                            row.expiration_date = opt["expiration_date"]
                     continue
                 opt = parse_option_details(t.asset_name or "", t.asset_type or "")
                 if not opt:
@@ -293,6 +334,19 @@ class DataUpdateService:
                     )
                 )
                 stats["options_added"] += 1
+
+            # Drop options rows left behind by reclassified trades: a common
+            # stock (e.g. "CrowdStrike ... Common Stock") must never keep an
+            # option child with a NULL strike.
+            orphaned = (
+                session.query(OptionsTrade)
+                .join(Trade, Trade.id == OptionsTrade.trade_id)
+                .filter(~Trade.asset_type.in_(["option_call", "option_put"]))
+                .all()
+            )
+            for row in orphaned:
+                session.delete(row)
+                stats["options_removed"] = stats.get("options_removed", 0) + 1
 
             session.commit()
             from congress_quant_tracker.enrichers.sectors import apply_sectors_to_session

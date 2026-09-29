@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter, Query
-from sqlalchemy import case, desc, extract, func
+from sqlalchemy import case, desc, extract, func, or_
 
 from congress_quant_tracker.config import settings
 from congress_quant_tracker.database.models import (
@@ -122,7 +122,12 @@ def api_dashboard(
         )
 
         min_date = session.query(func.min(Trade.trade_date)).scalar()
-        max_date = session.query(func.max(Trade.trade_date)).scalar()
+        # Clamp the top end: a misparsed future year must never define the range.
+        max_date = (
+            session.query(func.max(Trade.trade_date))
+            .filter(Trade.trade_date <= date.today())
+            .scalar()
+        )
 
         signal_dist: dict[str, int] = {}
         for tag_val in ("routine", "noteworthy", "suspicious", "high_alert"):
@@ -271,18 +276,72 @@ def api_search(q: str = Query(..., min_length=1)):
             .all()
         )
         stats = _pol_stats_map(session)
+
+        # Assets are searchable by symbol, by issuer name ("Zoetis") and by the
+        # description text in the filing, which is all a scanned PTR offers.
+        matched_tickers = {
+            row[0]
+            for row in session.query(Company.ticker)
+            .filter(Company.name.ilike(like), Company.ticker.isnot(None))
+            .all()
+        }
+        matched_tickers.update(
+            row[0]
+            for row in session.query(Trade.ticker)
+            .filter(Trade.asset_name.ilike(like), Trade.ticker.isnot(None))
+            .distinct()
+            .limit(100)
+            .all()
+        )
+        matched_tickers = [t for t in matched_tickers if t]
+
         tickers = (
             session.query(
                 Trade.ticker,
                 func.count(Trade.id).label("trades"),
                 func.sum(Trade.value_max).label("volume"),
+                func.count(func.distinct(Trade.politician_id)).label("politicians"),
+                func.max(Trade.asset_name).label("sample_asset"),
             )
-            .filter(Trade.ticker.ilike(like))
+            .filter(
+                or_(
+                    Trade.ticker.ilike(like),
+                    Trade.ticker.in_(matched_tickers) if matched_tickers else False,
+                )
+            )
             .group_by(Trade.ticker)
             .order_by(desc(func.count(Trade.id)))
             .limit(8)
             .all()
         )
+        company_names = {
+            row[0]: row[1]
+            for row in session.query(Company.ticker, Company.name)
+            .filter(Company.ticker.in_([t[0] for t in tickers] or [""]))
+            .all()
+        }
+        # Top holders per ticker: who is actually trading it.
+        holders: dict[str, list[dict]] = {}
+        if tickers:
+            holder_rows = (
+                session.query(
+                    Trade.ticker,
+                    Politician.name,
+                    Politician.party,
+                    func.count(Trade.id),
+                )
+                .join(Politician, Politician.id == Trade.politician_id)
+                .filter(Trade.ticker.in_([t[0] for t in tickers]))
+                .group_by(Trade.ticker, Politician.id)
+                .order_by(Trade.ticker, desc(func.count(Trade.id)))
+                .all()
+            )
+            for sym, pname, party, count in holder_rows:
+                bucket = holders.setdefault(sym, [])
+                if len(bucket) < 5:
+                    bucket.append(
+                        {"name": pname, "party": party, "trades": int(count or 0)}
+                    )
         return {
             "politicians": [
                 _politician_dict_from_stats(p, **stats.get(p.id, {})) for p in politicians
@@ -290,17 +349,27 @@ def api_search(q: str = Query(..., min_length=1)):
             "tickers": [
                 {
                     "ticker": t[0],
-                    "name": t[0],
+                    "name": _display_name(company_names.get(t[0]), t[4], t[0]),
                     "trades": t[1],
                     "total_volume": t[2] or 0,
-                    "unique_politicians": 0,
+                    "unique_politicians": t[3] or 0,
                     "avg_score": 0,
+                    "holders": holders.get(t[0], []),
                 }
                 for t in tickers
             ],
         }
     finally:
         session.close()
+
+
+def _display_name(company_name, asset_name, ticker: str) -> str:
+    """Prefer a real issuer name over the bare symbol."""
+    for candidate in (company_name, asset_name):
+        text = str(candidate or "").strip()
+        if text and text.upper() != str(ticker or "").upper():
+            return text[:120]
+    return ticker
 
 
 @router.get("/api/meta")

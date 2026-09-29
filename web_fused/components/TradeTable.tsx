@@ -1,10 +1,12 @@
 import Link from "next/link";
 import type { Trade } from "@/lib/types";
 import {
+  assetTypeLabel,
   formatDate,
   formatRange,
   formatScore,
   isBuy,
+  isExchange,
   politicianHref,
   sideLabel,
   tickerHref,
@@ -12,6 +14,12 @@ import {
 import { Avatar } from "./Avatar";
 import { PartyPill } from "./PartyPill";
 import { TagBadge } from "./TagBadge";
+
+function lagLabel(t: Trade): string | null {
+  if (t.lag_days == null) return null;
+  if (t.lag_days <= 45) return null;
+  return `filed +${t.lag_days}d late`;
+}
 
 export function TradeTable({
   trades,
@@ -87,13 +95,27 @@ export function TradeRow({
             {t.asset}
           </div>
         )}
+        {(assetTypeLabel(t.asset_type) || t.owner) && (
+          <div className="sub ellipsis" style={{ maxWidth: 180 }}>
+            {[assetTypeLabel(t.asset_type), t.owner].filter(Boolean).join(" · ")}
+          </div>
+        )}
+        {(t.strike != null || t.expiration_date) && (
+          <div className="sub ellipsis" style={{ maxWidth: 180 }}>
+            {t.strike != null ? `$${t.strike}` : "strike ?"}
+            {t.expiration_date ? ` exp ${t.expiration_date}` : ""}
+          </div>
+        )}
       </td>
       <td>
-        <span className={`side ${buy ? "buy" : "sell"}`}>{sideLabel(t.transaction_type)}</span>
+        <span className={`side ${isExchange(t.transaction_type) ? "exch" : buy ? "buy" : "sell"}`}>{sideLabel(t.transaction_type)}</span>
       </td>
       <td className="num">{formatRange(t.amount_min, t.amount_max, t.amount)}</td>
       <td className="hide-sm num">{formatDate(t.transaction_date)}</td>
-      <td className="hide-sm num">{formatDate(t.notification_date)}</td>
+      <td className="hide-sm num" title={lagLabel(t) || undefined}>
+        {formatDate(t.notification_date)}
+        {lagLabel(t) && <div className="sub" style={{ color: "var(--warn, #b45309)" }}>{lagLabel(t)}</div>}
+      </td>
       <td className="num">
         <span className="score-bar" title={t.reason || undefined}>
           <i style={{ width: `${Math.min(100, Math.max(0, t.score || 0))}%` }} />

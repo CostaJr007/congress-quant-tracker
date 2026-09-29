@@ -18,6 +18,46 @@ logger = logging.getLogger(__name__)
 # Values that are not real tickers (headers, separators, OCR noise)
 BAD_TICKERS = {"--", "N/A", "NONE", "UNKNOWN", "NA", "XXX", "ST", "PT", "ID", "PTR", "FILING"}
 
+# House PTR asset type codes (fd.house.gov/reference/asset-type-codes.aspx),
+# mapped to the internal asset types. Kept here so both the parser and the
+# reclassifier read the filing's own code instead of guessing from the name.
+PTR_ASSET_CODES: dict[str, str] = {
+    "ST": "stock",
+    "OP": "option",          # call/put resolved from the row description
+    "MF": "etf",             # mutual fund / ETF
+    "ET": "etf",
+    "CS": "bond",            # corporate security
+    "GS": "bond",            # government security (incl. municipal)
+    "MB": "bond",
+    "DE": "bond",
+    "AB": "bond",            # asset-backed
+    "CR": "crypto",
+    "CT": "other",           # commodity
+    "CD": "other",           # certificate of deposit
+    "BA": "other",           # bank account
+    "HN": "other",           # hedge fund
+    "PS": "other",           # partnership
+    "PE": "other",
+    "VC": "other",
+    "RE": "other",
+    "OL": "other",           # owned land
+    "VI": "other",           # variable insurance
+    "AN": "other",
+    "TR": "other",
+    "OT": "other",
+}
+
+
+def asset_type_from_code(code: str | None) -> str | None:
+    """Internal asset type for a PTR asset-type code, or None if unknown."""
+    return PTR_ASSET_CODES.get(str(code or "").strip().upper())
+
+
+def ptr_code_in_name(asset_name: str | None) -> str | None:
+    """The bracketed PTR asset-type code carried in an asset name, if any."""
+    match = re.search(r"\[([A-Z]{2,3})\]", str(asset_name or "").upper())
+    return match.group(1) if match else None
+
 
 def normalize_transaction_type(tx) -> str:
     """Map free-text transaction labels to buy|sell|exchange (safe default: buy)."""

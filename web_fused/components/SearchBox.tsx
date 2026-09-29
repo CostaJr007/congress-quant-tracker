@@ -107,19 +107,43 @@ export function SearchBox() {
             <div className="search-sec">
               <div className="search-label">Tickers</div>
               {ticks.map((t) => (
-                <button
-                  key={t.ticker}
-                  className="search-row"
-                  type="button"
-                  onClick={() => {
-                    setOpen(false);
-                    setQ("");
-                    router.push(tickerHref(t.ticker));
-                  }}
-                >
-                  <span className="ticker">{t.ticker}</span>
-                  <span className="meta">{formatNumber(t.trades)} trades</span>
-                </button>
+                <div key={t.ticker}>
+                  <button
+                    className="search-row"
+                    type="button"
+                    onClick={() => {
+                      setOpen(false);
+                      setQ("");
+                      router.push(tickerHref(t.ticker));
+                    }}
+                  >
+                    <span className="ticker">{t.ticker}</span>
+                    {t.name && t.name.toUpperCase() !== t.ticker.toUpperCase() && (
+                      <span className="ellipsis dim">{t.name}</span>
+                    )}
+                    <span className="meta">
+                      {formatNumber(t.trades)} trades · {formatNumber(t.unique_politicians)} pols
+                    </span>
+                  </button>
+                  {(t.holders || []).map((h) => (
+                    <button
+                      key={`${t.ticker}-${h.name}`}
+                      className="search-row search-holder"
+                      type="button"
+                      onClick={() => {
+                        setOpen(false);
+                        setQ("");
+                        router.push(politicianHref(h.name));
+                      }}
+                    >
+                      <span className="ellipsis dim" style={{ paddingLeft: 12 }}>
+                        {h.name}
+                      </span>
+                      <PartyPill party={h.party} />
+                      <span className="meta">{formatNumber(h.trades)}</span>
+                    </button>
+                  ))}
+                </div>
               ))}
             </div>
           )}

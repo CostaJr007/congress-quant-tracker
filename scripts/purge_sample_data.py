@@ -2,6 +2,8 @@
 
 Purges:
   * Trades whose notes mark them as samples ("Sample trade for ...")
+  * Trades read from the PTR form's own printed example row
+    ("Example Mega Corp Common Stock"), which OCR reads as a real disclosure
   * Orphaned OptionsTrade rows left behind by those trades
   * Random market_cap/beta values injected by the old seeder
     (fake precision — real values come from yfinance enrichment)
@@ -39,6 +41,11 @@ from congress_quant_tracker.database.models import (
 def main() -> None:
     ap = argparse.ArgumentParser(description="Purge generated/sample data")
     ap.add_argument("--apply", action="store_true", help="Execute the purge (default: dry-run)")
+    ap.add_argument(
+        "--trades-only",
+        action="store_true",
+        help="Remove the bogus trades but leave Company market_cap/beta untouched",
+    )
     args = ap.parse_args()
 
     session = get_session(get_engine(settings.DATABASE_URL))
@@ -49,6 +56,8 @@ def main() -> None:
                 or_(
                     Trade.notes.ilike("sample trade%"),
                     Trade.notes.ilike("sample % option"),
+                    Trade.asset_name.ilike("%example mega corp%"),
+                    Trade.asset_name.ilike("%exmpl%"),
                 )
             )
             .all()
@@ -60,7 +69,11 @@ def main() -> None:
             else []
         )
 
-        seeded_companies = session.query(Company).filter(Company.market_cap.isnot(None)).all()
+        seeded_companies = (
+            []
+            if args.trades_only
+            else session.query(Company).filter(Company.market_cap.isnot(None)).all()
+        )
 
         print(f"Sample trades found:        {len(sample_ids)}")
         print(f"Orphaned options to remove: {len(opt_children)}")

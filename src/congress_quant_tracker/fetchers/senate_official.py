@@ -116,11 +116,14 @@ def probe_efd_access(timeout: float = 20.0, proxy: str | None = None) -> dict[st
 # ── Strategy A: CongressInvests ────────────────────────────────────────
 
 
-async def fetch_senate_via_congressinvests(max_pages: int = 30) -> list[dict]:
+async def fetch_senate_via_congressinvests(
+    max_pages: int = 30, since: date | None = None
+) -> list[dict]:
     """Fetch senate trades from the free CongressInvests API.
 
     Per-page retry: a transient 429/5xx on one page must not truncate
     history — we retry then continue with partial results.
+    `since` stops paging once a whole page is older than the cutoff.
     """
     import asyncio
 
@@ -167,13 +170,24 @@ async def fetch_senate_via_congressinvests(max_pages: int = 30) -> list[dict]:
         offset += 200
         if len(batch) < 200:
             break
+        if since is not None:
+            from congress_quant_tracker.fetchers.congress_invests import (
+                _page_older_than,
+            )
+
+            if _page_older_than(batch, since):
+                break
     return all_trades
 
 
-def fetch_senate_via_congressinvests_sync(max_pages: int = 30) -> list[dict]:
+def fetch_senate_via_congressinvests_sync(
+    max_pages: int = 30, since: date | None = None
+) -> list[dict]:
     import asyncio
 
-    return asyncio.run(fetch_senate_via_congressinvests(max_pages=max_pages))
+    return asyncio.run(
+        fetch_senate_via_congressinvests(max_pages=max_pages, since=since)
+    )
 
 
 # ── Strategy B: Playwright eFD ─────────────────────────────────────────

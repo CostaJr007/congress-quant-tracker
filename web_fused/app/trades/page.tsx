@@ -25,6 +25,8 @@ function TradesView() {
   const chamber = get("chamber");
   const month = get("month");
   const tradeType = get("trade_type");
+  const assetType = get("asset_type");
+  const hasValue = get("has_value");
   const sortBy = get("sort_by", "date");
   const offset = Math.max(0, Number(get("offset", "0")) || 0);
 
@@ -35,6 +37,8 @@ function TradesView() {
     chamber,
     month,
     trade_type: tradeType,
+    asset_type: assetType,
+    has_value: hasValue,
     sort_by: sortBy,
     limit: LIMIT,
     offset,
@@ -91,6 +95,21 @@ function TradesView() {
           <option value="">Buy + sell</option>
           <option value="buy">Buy</option>
           <option value="sell">Sell</option>
+        </select>
+        <select className="select" value={assetType} onChange={(e) => set("asset_type", e.target.value)}>
+          <option value="">All assets</option>
+          <option value="stock">Stocks</option>
+          <option value="etf">ETFs</option>
+          <option value="option_call">Calls</option>
+          <option value="option_put">Puts</option>
+          <option value="bond">Bonds</option>
+          <option value="crypto">Crypto</option>
+          <option value="other">Other</option>
+        </select>
+        <select className="select" value={hasValue} onChange={(e) => set("has_value", e.target.value)}>
+          <option value="">Any amount</option>
+          <option value="true">With amount</option>
+          <option value="false">Amount unknown</option>
         </select>
         <select className="select" value={sortBy} onChange={(e) => set("sort_by", e.target.value)}>
           <option value="date">Newest filed</option>

@@ -56,6 +56,7 @@ class SenatePipeline:
         max_pages: int = 25,
         max_efd_reports: int = 40,
         headless: bool = True,
+        since_days: int | None = None,
     ) -> dict:
         session = get_session(self.engine)
         log = UpdateLog(
@@ -81,6 +82,20 @@ class SenatePipeline:
         try:
             log.status = "in_progress"
             session.commit()
+
+            from datetime import timedelta as _td
+
+            from congress_quant_tracker.services.screener import (
+                resolve_since_days,
+                save_checkpoint,
+            )
+
+            effective_days, mode = resolve_since_days(
+                session, since_days, "senate_last_run"
+            )
+            stats["screener_mode"] = mode
+            stats["since_days"] = effective_days
+            since = datetime.utcnow().date() - _td(days=effective_days)
 
             trades: list[dict] = []
             probe = probe_efd_access()
@@ -177,7 +192,7 @@ class SenatePipeline:
                     except Exception as e2:
                         print(f"[Senate] eFD failed ({e2}); falling back to CongressInvests")
                         try:
-                            trades = fetch_senate_via_congressinvests_sync(max_pages=max_pages)
+                            trades = fetch_senate_via_congressinvests_sync(max_pages=max_pages, since=since)
                         except Exception as e3:
                             logger.warning("CongressInvests fallback also failed: %s", e3)
                             trades = []
@@ -224,6 +239,10 @@ class SenatePipeline:
             log.completed_at = datetime.utcnow()
             log.details = str(stats)
             session.commit()
+            try:
+                save_checkpoint(session, "senate_last_run")
+            except Exception:
+                logger.debug("senate checkpoint save failed", exc_info=True)
             print("[OK] Senate done: trades_added=%s fetched=%s strategy=%s" % (
                 stats.get("trades_added"),
                 stats.get("trades_fetched"),
@@ -288,10 +307,12 @@ class SenatePipeline:
         from congress_quant_tracker.services.ingest import normalize_record, store_trade
 
         raw = {**trade, "source": trade.get("source") or "senate"}
-        rec, reason = normalize_record(raw)
+        rec, reason = normalize_record(raw, session=session)
         if not rec:
             if reason == "sample_data_rejected":
                 stats["samples_rejected"] = stats.get("samples_rejected", 0) + 1
+            else:
+                stats["trades_skipped"] = stats.get("trades_skipped", 0) + 1
             return False
 
         name = rec["politician_name"]

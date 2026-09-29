@@ -45,18 +45,75 @@ def _photo_for(pol: Politician | None) -> str | None:
 
 
 def _trade_dict_from_orm(trade: Trade, pol: Politician | None = None) -> dict:
+    from congress_quant_tracker.database.models import OptionsTrade
+
     pol = pol or trade.politician
+    tx = trade.transaction_type or ""
+    side = "Purchase" if tx == "buy" else ("Exchange" if tx == "exchange" else "Sale")
+    # Legacy rows stored 0 for "amount unknown"; the UI contract is NULL.
+    amount_min = trade.value_min if trade.value_min else None
+    amount_max = trade.value_max if trade.value_max else None
+    lag_days = None
+    if trade.trade_date and trade.filing_date:
+        try:
+            lag_days = (trade.filing_date - trade.trade_date).days
+        except (TypeError, ValueError):
+            lag_days = None
+    strike = None
+    expiration = None
+    if (trade.asset_type or "").startswith("option"):
+        from sqlalchemy.orm import object_session
+
+        from congress_quant_tracker.database.models import OptionsTrade
+
+        opt = None
+        try:
+            sess = object_session(trade)
+            if sess is not None:
+                opt = (
+                    sess.query(OptionsTrade)
+                    .filter(OptionsTrade.trade_id == trade.id)
+                    .first()
+                )
+        except Exception:
+            opt = None
+        if opt is None:
+            # Detached instance (or no bound session): one indexed lookup.
+            try:
+                fresh = get_db()
+                try:
+                    opt = (
+                        fresh.query(OptionsTrade)
+                        .filter(OptionsTrade.trade_id == trade.id)
+                        .first()
+                    )
+                    if opt:
+                        strike = opt.strike
+                        expiration = (
+                            str(opt.expiration_date) if opt.expiration_date else None
+                        )
+                        opt = None  # already consumed below-safe
+                finally:
+                    fresh.close()
+            except Exception:
+                opt = None
+        if opt is not None:
+            strike = opt.strike
+            expiration = str(opt.expiration_date) if opt.expiration_date else None
     return {
         "id": trade.id,
         "ticker": trade.ticker,
         "asset": trade.asset_name,
-        "transaction_type": "Purchase" if trade.transaction_type == "buy" else "Sale",
+        "transaction_type": side,
         "transaction_date": str(trade.trade_date) if trade.trade_date else None,
         "notification_date": str(trade.filing_date) if trade.filing_date else None,
-        "amount_min": trade.value_min,
-        "amount_max": trade.value_max,
+        "lag_days": lag_days,
+        "amount_min": amount_min,
+        "amount_max": amount_max,
         "amount": trade.value_range,
         "asset_type": trade.asset_type,
+        "strike": strike,
+        "expiration_date": expiration,
         "score": trade.score or 0,
         "tag": trade.tag or "routine",
         "reason": trade.reason,

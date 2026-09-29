@@ -26,7 +26,7 @@ from congress_quant_tracker.services.official_pipeline import OfficialHousePipel
 def main() -> None:
     p = argparse.ArgumentParser(description="Official House PTR update")
     p.add_argument("--max", type=int, default=60, help="Max newest PTR filings to process")
-    p.add_argument("--days", type=int, default=150, help="Only filings in the last N days")
+    p.add_argument("--days", type=int, default=None, help="Only filings in the last N days (default: incremental from checkpoint)")
     p.add_argument("--years", type=int, nargs="*", default=None, help="Filing years (default: this+last)")
     p.add_argument("--no-tavily", action="store_true", help="Skip Tavily enrichment")
     p.add_argument("--force-pdf", action="store_true", help="Re-download PDFs")
