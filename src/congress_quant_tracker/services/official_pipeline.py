@@ -103,39 +103,44 @@ class OfficialHousePipeline:
             "groq_enabled": bool(settings.GROQ_API_KEY),
         }
 
+        fetcher = None
+        failed_dates: list = []
+        done_dates: list = []
         try:
             log.status = "in_progress"
             session.commit()
 
-            with HouseOfficialFetcher() as fetcher:
-                index = fetcher.fetch_ptr_index(years=years)
-                stats["filings_indexed"] = len(index)
+            # Keep the HTTP client open for the whole run: PTR PDFs are downloaded
+            # after indexing, so closing it here made every download fail.
+            fetcher = HouseOfficialFetcher()
+            index = fetcher.fetch_ptr_index(years=years)
+            stats["filings_indexed"] = len(index)
 
-                # Register every filer in the index (any filing type) before
-                # any PDF work — no politician can pass hidden, even when
-                # parsing is capped or a PDF fails.
-                filers = fetcher.fetch_all_filers(years=years)
-                stats["filers_indexed"] = len(filers)
-                seen_names: set[str] = set()
-                for f in filers:
-                    fname = (f.get("name") or "").strip()
-                    if not fname or fname.lower() in seen_names:
-                        continue
-                    seen_names.add(fname.lower())
-                    try:
-                        with session.begin_nested():
-                            _, created = self._ensure_politician(session, fname, filing=f)
-                            if created:
-                                stats["politicians_added"] += 1
-                    except Exception as e:
-                        stats["errors"] += 1
-                        logger.debug("Filer registration failed %s: %s", fname, e)
-                session.commit()
-                print(
-                    f"[House Official] indexed={stats['filings_indexed']} "
-                    f"filers={stats['filers_indexed']} "
-                    f"politicians_registered={stats['politicians_added']}"
-                )
+            # Register every filer in the index (any filing type) before
+            # any PDF work — no politician can pass hidden, even when
+            # parsing is capped or a PDF fails.
+            filers = fetcher.fetch_all_filers(years=years)
+            stats["filers_indexed"] = len(filers)
+            seen_names: set[str] = set()
+            for f in filers:
+                fname = (f.get("name") or "").strip()
+                if not fname or fname.lower() in seen_names:
+                    continue
+                seen_names.add(fname.lower())
+                try:
+                    with session.begin_nested():
+                        _, created = self._ensure_politician(session, fname, filing=f)
+                        if created:
+                            stats["politicians_added"] += 1
+                except Exception as e:
+                    stats["errors"] += 1
+                    logger.debug("Filer registration failed %s: %s", fname, e)
+            session.commit()
+            print(
+                f"[House Official] indexed={stats['filings_indexed']} "
+                f"filers={stats['filers_indexed']} "
+                f"politicians_registered={stats['politicians_added']}"
+            )
 
             from congress_quant_tracker.services.screener import (
                 resolve_since_days,
@@ -168,6 +173,8 @@ class OfficialHousePipeline:
                         path = fetcher.download_pdf(filing, force=not skip_download_if_exists)
                         if not path:
                             stats["errors"] += 1
+                            if filing.get("filing_date"):
+                                failed_dates.append(filing["filing_date"])
                             continue
                         stats["pdfs_downloaded"] += 1
 
@@ -208,6 +215,8 @@ class OfficialHousePipeline:
                                 stats["trades_added"] += 1
 
                         session.commit()
+                        if filing.get("filing_date"):
+                            done_dates.append(filing["filing_date"])
                         if i % 10 == 0 or i == len(selected):
                             print(
                                 f"  [{i}/{len(selected)}] {name or filing.get('name')} "
@@ -217,6 +226,8 @@ class OfficialHousePipeline:
                         stats["errors"] += 1
                         logger.exception("Filing failed %s: %s", filing.get("doc_id"), e)
                         session.rollback()
+                        if filing.get("filing_date"):
+                            failed_dates.append(filing["filing_date"])
                         continue
 
             # Score new/zero-score trades
@@ -238,10 +249,11 @@ class OfficialHousePipeline:
             log.details = str(stats)
             session.commit()
             try:
-                watermark = max(
-                    (f.get("filing_date") for f in selected if f.get("filing_date")),
-                    default=None,
-                )
+                # Advance only over filings that were actually stored; a failed
+                # filing holds the watermark back so the next run retries it.
+                watermark = max(done_dates, default=None)
+                if failed_dates and watermark is not None:
+                    watermark = min(watermark, min(failed_dates) - timedelta(days=1))
                 save_checkpoint(
                     session, "house_last_run", "house_last_filing", watermark
                 )
@@ -268,6 +280,8 @@ class OfficialHousePipeline:
                 pass
             raise
         finally:
+            if fetcher is not None:
+                fetcher.close()
             session.close()
 
     def _lookup_member(self, name: str) -> tuple[str, str, str | None, str | None]:
